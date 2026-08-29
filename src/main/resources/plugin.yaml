@@ -9,7 +9,7 @@ spec:
     name: SwaggyMacro
     website: https://github.com/SwaggyMacro
   logo: logo.png
-  homepage: https://github.com/SwaggyMacro/lottie#readme
+  homepage: https://github.com/SwaggyMacro/plugin-lottie
   repo: https://github.com/SwaggyMacro/plugin-lottie
   issues: https://github.com/SwaggyMacro/plugin-lottie/issues
   displayName: "Lottie 动画"
