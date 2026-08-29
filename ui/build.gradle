@@ -1,0 +1,56 @@
+plugins {
+    id 'base'
+    id "com.github.node-gradle.node" version "7.1.0"
+}
+
+group 'cn.ncii.lottie.ui'
+
+node {
+    // Halo's current UI toolchain requires Node 20.19+; keep the Gradle
+    // downloaded runtime aligned with package.json on every developer machine.
+    version = '22.14.0'
+    download = true
+    pnpmVersion = '10.33.0'
+}
+
+tasks.register('pnpmBuild', PnpmTask) {
+    group = 'build'
+    description = 'Build the UI project using pnpm'
+    args = ['build']
+    dependsOn tasks.named('pnpmInstall')
+    inputs.dir(layout.projectDirectory.dir('src'))
+    inputs.files(fileTree(
+        dir: layout.projectDirectory,
+        includes: ['*.cjs', '*.ts', '*.js', '*.json', '*.yaml']))
+    outputs.dir(layout.buildDirectory.dir('dist'))
+}
+
+// pnpm creates junctions inside node_modules/.pnpm. Gradle 9.4 cannot
+// reliably snapshot those junctions on Windows, so dependency installation is
+// deliberately treated as an untracked preparation step.
+tasks.named('pnpmInstall') {
+    doNotTrackState('pnpm manages the node_modules tree and its junctions')
+    // DevTools runs Gradle without a TTY. pnpm otherwise aborts when it needs
+    // to replace an existing modules tree (for example after a dependency
+    // layout change), even when the project .npmrc is not discovered.
+    environment = ['CI': 'true']
+    // On Windows antivirus/indexers can keep a hoisted package directory open.
+    // Installing into a fresh directory avoids pnpm's non-interactive purge
+    // path and keeps the source tree free of generated module links.
+    args = ['--config.confirmModulesPurge=false']
+}
+
+tasks.register('pnpmCheck', PnpmTask) {
+    group = 'verification'
+    description = 'Run unit tests for the UI project using pnpm'
+    args = ['test:unit']
+    dependsOn tasks.named('pnpmInstall')
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('pnpmCheck')
+}
+
+tasks.named('assemble') {
+    dependsOn tasks.named('pnpmBuild')
+}

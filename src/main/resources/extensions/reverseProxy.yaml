@@ -1,0 +1,14 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: ReverseProxy
+metadata:
+  name: lottie-static-assets
+rules:
+  # ReverseProxy paths are appended to /plugins/{name}/assets.  Keep the
+  # declared URL path and source directory aligned so generated UI chunks are
+  # reachable at /plugins/lottie/assets/ui/**.
+  - path: /ui/**
+    file:
+      directory: static/ui
+  - path: /lottie/**
+    file:
+      directory: static/lottie

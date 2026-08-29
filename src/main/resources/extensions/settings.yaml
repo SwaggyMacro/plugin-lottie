@@ -1,0 +1,38 @@
+apiVersion: v1alpha1
+kind: Setting
+metadata:
+  name: lottie-settings
+spec:
+  forms:
+    - group: general
+      label: 通用设置
+      formSchema:
+        - $formkit: number
+          name: maxCompressedMb
+          label: ZIP 压缩包大小上限（MB）
+          value: 50
+          min: 1
+          max: 500
+        - $formkit: number
+          name: maxExpandedMb
+          label: 解压大小上限（MB）
+          value: 200
+          min: 1
+          max: 1000
+        - $formkit: checkbox
+          name: readAnimationDimensions
+          label: 从动画文件读取默认宽高
+          help: 优先使用动画文件中的宽高属性；读取失败时使用下方默认值。
+          value: true
+        - $formkit: number
+          name: defaultWidth
+          label: 默认宽度（px）
+          value: 160
+          min: 1
+          max: 4096
+        - $formkit: number
+          name: defaultHeight
+          label: 默认高度（px）
+          value: 160
+          min: 1
+          max: 4096

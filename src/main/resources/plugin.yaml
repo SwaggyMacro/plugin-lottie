@@ -1,0 +1,21 @@
+apiVersion: plugin.halo.run/v1alpha1
+kind: Plugin
+metadata:
+  name: lottie
+spec:
+  enabled: true
+  requires: ">=2.26.0"
+  author:
+    name: SwaggyMacro
+    website: https://github.com/SwaggyMacro
+  logo: logo.png
+  homepage: https://github.com/SwaggyMacro/lottie#readme
+  repo: https://github.com/SwaggyMacro/plugin-lottie
+  issues: https://github.com/SwaggyMacro/plugin-lottie/issues
+  displayName: "Lottie 动画"
+  description: "让 Halo 支持 Lottie/TGS 矢量动画，支持在文章内、站点任意地方插入。"
+  settingName: lottie-settings
+  configMapName: lottie-config
+  license:
+    - name: "GPL-3.0"
+      url: "https://github.com/SwaggyMacro/lottie/blob/main/LICENSE"

@@ -1,0 +1,30 @@
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: lottie-manager
+  labels:
+    halo.run/role-template: "true"
+  annotations:
+    rbac.authorization.halo.run/module: "Lottie Management"
+    rbac.authorization.halo.run/display-name: "Lottie Manager"
+    rbac.authorization.halo.run/ui-permissions: '["plugin:lottie:manage"]'
+rules:
+  - apiGroups: ["console.api.lottie.halo.run"]
+    resources: ["lottie/animations", "lottie/groups", "lottie/attachments", "lottie/attachment-groups", "lottie/import", "lottie/animations/import"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: v1alpha1
+kind: Role
+metadata:
+  name: lottie-public-reader
+  labels:
+    halo.run/role-template: "true"
+    halo.run/hidden: "true"
+    rbac.authorization.halo.run/aggregate-to-anonymous: "true"
+  annotations:
+    rbac.authorization.halo.run/module: "Lottie"
+    rbac.authorization.halo.run/display-name: "Public Lottie reader"
+rules:
+  - apiGroups: ["api.lottie.halo.run"]
+    resources: ["lottie/animations"]
+    verbs: ["get"]
