@@ -51,6 +51,8 @@ jobs:
                   key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
                   restore-keys: |
                       ${{ runner.os }}-pnpm-store-
+            - name: Make Gradle wrapper executable
+              run: chmod +x gradlew
             - name: Install Frontend Dependencies
               run: |
                   ./gradlew pnpmInstall
