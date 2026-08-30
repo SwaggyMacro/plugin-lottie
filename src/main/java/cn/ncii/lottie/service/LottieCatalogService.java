@@ -45,7 +45,7 @@ public class LottieCatalogService {
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
-    private static final int MAX_FILES = 100;
+    private static final int DEFAULT_MAX_FILES = 100;
     private static final long MAX_COMPRESSED = 50L * 1024 * 1024;
     private static final long MAX_EXPANDED = 200L * 1024 * 1024;
 
@@ -87,7 +87,7 @@ public class LottieCatalogService {
     /** Returns the effective import/insertion defaults from plugin settings. */
     public Mono<EffectiveSettings> effectiveSettings() {
         // Prefer intrinsic animation dimensions by default; configured values remain fallback.
-        EffectiveSettings fallback = new EffectiveSettings(true, 160, 160);
+        EffectiveSettings fallback = new EffectiveSettings(true, 160, 160, DEFAULT_MAX_FILES);
         if (settingFetcher == null) return Mono.just(fallback);
         return settingFetcher.fetch("general", PluginSettings.class)
             .map(settings -> settings == null ? fallback : settings.toEffective())
@@ -304,10 +304,27 @@ public class LottieCatalogService {
             .flatMap(repository()::saveAnimation);
     }
 
+    /** Previews an archive using the default limit for standalone callers. */
     public List<ImportCandidate> previewZip(byte[] archive) throws IOException {
+        return previewZip(archive, DEFAULT_MAX_FILES);
+    }
+
+    /** Previews an archive using the configured plugin limits. */
+    public Mono<List<ImportCandidate>> previewZipWithSettings(byte[] archive) {
+        return effectiveSettings().flatMap(settings -> {
+            try {
+                return Mono.just(previewZip(archive, settings.maxFiles()));
+            } catch (IOException | RuntimeException exception) {
+                return Mono.error(exception);
+            }
+        });
+    }
+
+    private List<ImportCandidate> previewZip(byte[] archive, int maxFiles) throws IOException {
         if (archive.length > MAX_COMPRESSED) {
             throw new IllegalArgumentException("Compressed archive exceeds 50MB");
         }
+        int fileLimit = maxFiles > 0 ? maxFiles : DEFAULT_MAX_FILES;
         List<ImportCandidate> candidates = new ArrayList<>();
         try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(archive))) {
             ZipEntry entry;
@@ -315,8 +332,8 @@ public class LottieCatalogService {
             int entries = 0;
             while ((entry = input.getNextEntry()) != null) {
                 if (entry.isDirectory()) continue;
-                if (++entries > MAX_FILES) {
-                    throw new IllegalArgumentException("Archive contains more than 100 files");
+                if (++entries > fileLimit) {
+                    throw new IllegalArgumentException("Archive contains more than " + fileLimit + " files");
                 }
                 String format = formatOf(entry.getName());
                 if (format == null) continue;
@@ -353,7 +370,8 @@ public class LottieCatalogService {
     public Mono<List<LottieAnimation>> importZip(byte[] archive, String duplicateMode,
                                                   String groupName, String attachmentGroupName,
                                                   String attachmentPolicyName) throws IOException {
-        return Flux.fromIterable(previewZip(archive))
+        return previewZipWithSettings(archive)
+            .flatMapMany(Flux::fromIterable)
             .map(candidate -> groupName == null || groupName.isBlank()
                 ? candidate : candidate.withGroupName(groupName))
             .concatMap(candidate -> importCandidate(candidate, duplicateMode, attachmentGroupName, attachmentPolicyName))
@@ -1049,6 +1067,7 @@ public class LottieCatalogService {
     }
 
     public static final class PluginSettings {
+        public Integer maxFiles = DEFAULT_MAX_FILES;
         public Boolean readAnimationDimensions = true;
         public Integer defaultWidth = 160;
         public Integer defaultHeight = 160;
@@ -1056,11 +1075,13 @@ public class LottieCatalogService {
         EffectiveSettings toEffective() {
             return new EffectiveSettings(Boolean.TRUE.equals(readAnimationDimensions),
                 clampDimension(defaultWidth == null ? 160 : defaultWidth),
-                clampDimension(defaultHeight == null ? 160 : defaultHeight));
+                clampDimension(defaultHeight == null ? 160 : defaultHeight),
+                maxFiles == null || maxFiles < 1 ? DEFAULT_MAX_FILES : maxFiles);
         }
     }
 
-    public record EffectiveSettings(boolean readAnimationDimensions, int defaultWidth, int defaultHeight) {}
+    public record EffectiveSettings(boolean readAnimationDimensions, int defaultWidth, int defaultHeight,
+                                    int maxFiles) {}
 
     public record ImportCandidate(String sourceFileName, String displayName, String groupName,
                                   String format, String mediaType, @JsonIgnore String content,

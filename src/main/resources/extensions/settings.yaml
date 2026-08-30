@@ -19,6 +19,12 @@ spec:
           value: 200
           min: 1
           max: 1000
+        - $formkit: number
+          name: maxFiles
+          label: ZIP 文件数量上限
+          value: 100
+          min: 1
+          max: 10000
         - $formkit: checkbox
           name: readAnimationDimensions
           label: 从动画文件读取默认宽高

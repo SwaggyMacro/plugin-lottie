@@ -261,15 +261,15 @@ public class LottieController {
         consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
         produces = MediaType.APPLICATION_JSON_VALUE)
     public Mono<List<LottieCatalogService.ImportCandidate>> preview(@RequestPart("file") Flux<FilePart> files) {
-        return files.concatMap(file -> read(file).map(bytes -> {
+        return files.concatMap(file -> read(file).flatMapMany(bytes -> {
             try {
                 String filename = file.filename() == null ? "animation.zip" : file.filename();
                 if (!filename.toLowerCase(java.util.Locale.ROOT).endsWith(".zip")) {
-                    return List.of(catalog.normalizeUpload(filename, bytes));
+                    return Mono.just(List.of(catalog.normalizeUpload(filename, bytes)));
                 }
-                return catalog.previewZip(bytes);
+                return catalog.previewZipWithSettings(bytes);
             } catch (IOException exception) {
-                throw new IllegalArgumentException("Unable to read archive", exception);
+                return Mono.error(new IllegalArgumentException("Unable to read archive", exception));
             }
         })).flatMapIterable(item -> item).collectList();
     }

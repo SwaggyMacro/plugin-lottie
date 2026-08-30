@@ -2,6 +2,8 @@ package cn.ncii.lottie;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import cn.ncii.lottie.service.LottieCatalogService;
 import java.io.ByteArrayOutputStream;
@@ -10,6 +12,8 @@ import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Mono;
+import run.halo.app.plugin.ReactiveSettingFetcher;
 
 class LottieCatalogServiceTest {
 
@@ -61,5 +65,28 @@ class LottieCatalogServiceTest {
         LottieCatalogService.ImportCandidate candidate = new LottieCatalogService()
             .normalizeUpload("sticker.lottie", output.toByteArray());
         assertEquals("lottie", candidate.format());
+    }
+
+    @Test
+    void usesConfiguredArchiveFileLimit() throws Exception {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        try (ZipOutputStream zip = new ZipOutputStream(output, StandardCharsets.UTF_8)) {
+            for (int index = 0; index < 2; index++) {
+                zip.putNextEntry(new ZipEntry("animation-" + index + ".json"));
+                zip.write("{\"v\":\"5.7.0\"}".getBytes(StandardCharsets.UTF_8));
+                zip.closeEntry();
+            }
+        }
+
+        ReactiveSettingFetcher settingFetcher = mock(ReactiveSettingFetcher.class);
+        LottieCatalogService.PluginSettings settings = new LottieCatalogService.PluginSettings();
+        settings.maxFiles = 1;
+        when(settingFetcher.fetch("general", LottieCatalogService.PluginSettings.class))
+            .thenReturn(Mono.just(settings));
+
+        LottieCatalogService service = new LottieCatalogService(null, null, null, settingFetcher);
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
+            () -> service.previewZipWithSettings(output.toByteArray()).block());
+        assertEquals("Archive contains more than 1 files", exception.getMessage());
     }
 }
