@@ -29,7 +29,7 @@ spec:
           name: readAnimationDimensions
           label: 从动画文件读取默认宽高
           help: 优先使用动画文件中的宽高属性；读取失败时使用下方默认值。
-          value: true
+          value: false
         - $formkit: number
           name: defaultWidth
           label: 默认宽度（px）
