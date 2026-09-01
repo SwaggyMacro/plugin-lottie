@@ -37,7 +37,7 @@ public class LottieHeadProcessor implements TemplateHeadProcessor {
             .then();
     }
 
-    private static SkeletonStyle toSkeletonStyle(LottieSkeletonSettings settings) {
+    static SkeletonStyle toSkeletonStyle(LottieSkeletonSettings settings) {
         if (settings == null) {
             return DEFAULT_SKELETON_STYLE;
         }
@@ -110,11 +110,11 @@ public class LottieHeadProcessor implements TemplateHeadProcessor {
         model.add(factory.createCloseElementTag("script"));
     }
 
-    private record SkeletonStyle(boolean enabled, boolean loaderEnabled, String background,
-                                 String frameBorder, String border, String accent,
-                                 String accentShadow, String breatheShadow, int radius) {
+    record SkeletonStyle(boolean enabled, boolean loaderEnabled, String background,
+                         String frameBorder, String border, String accent,
+                         String accentShadow, String breatheShadow, int radius) {
 
-        private String cssVariables() {
+        String cssVariables() {
             // Custom properties on :root inherit into the comment widget's
             // Shadow DOM, while a halo-lottie selector in document CSS cannot.
             return ":root{--halo-lottie-skeleton-background:" + background
