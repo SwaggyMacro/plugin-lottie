@@ -7,6 +7,22 @@ const ALIGNMENTS: Record<Align, [number, number]> = {
 const FITS: Fit[] = ['contain', 'cover', 'fill', 'none', 'fit-width', 'fit-height']
 const sourceBytesCache = new Map<string, Promise<Uint8Array>>()
 
+const SKELETON_STYLES = `@keyframes halo-lottie-loader-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes halo-lottie-loader-breathe { from { opacity: .5; } to { opacity: 1; } }
+halo-lottie[data-halo-lottie-loading='true'] { display:inline-flex;position:relative;width:var(--halo-lottie-width,160px);height:var(--halo-lottie-height,160px);overflow:hidden;vertical-align:middle;border-radius:var(--halo-lottie-skeleton-radius,8px);background:var(--halo-lottie-skeleton-background,#f3f4f6);box-shadow:inset 0 0 0 1px var(--halo-lottie-skeleton-frame-border,#d7dbe0); }
+halo-lottie[data-halo-lottie-loading='true']::before { position:absolute;z-index:1;top:50%;left:50%;width:30%;min-width:24px;max-width:56px;aspect-ratio:1;border:2px solid var(--halo-lottie-skeleton-border,#d7dbe0);border-top-color:var(--halo-lottie-skeleton-accent,#6b7280);border-radius:50%;box-shadow:0 0 0 5px var(--halo-lottie-skeleton-accent-shadow,rgb(107 114 128 / 10%));content:'';pointer-events:none;transform:translate(-50%,-50%);animation:halo-lottie-loader-spin 1.05s linear infinite; }
+halo-lottie[data-halo-lottie-loading='true']::after { position:absolute;z-index:1;inset:0;border:1px solid var(--halo-lottie-skeleton-frame-border,#d7dbe0);border-radius:inherit;box-shadow:inset 0 0 24px var(--halo-lottie-skeleton-accent-shadow,rgb(107 114 128 / 10%));content:'';pointer-events:none;animation:halo-lottie-loader-breathe 1.35s ease-in-out infinite alternate; }
+@media (prefers-reduced-motion: reduce) { halo-lottie[data-halo-lottie-loading='true']::before,halo-lottie[data-halo-lottie-loading='true']::after { animation:none; } }`
+
+function ensureSkeletonStyles(root: Document | ShadowRoot = document) {
+  if (root.querySelector('[data-halo-lottie-skeleton-style]')) return
+  const style = document.createElement('style')
+  style.setAttribute('data-halo-lottie-skeleton-style', 'true')
+  style.textContent = SKELETON_STYLES
+  if (root instanceof Document) root.head.append(style)
+  else root.append(style)
+}
+
 function bool(element: HTMLElement, name: string, fallback: boolean) {
   const value = element.getAttribute(name)
   return value === null ? fallback : value !== 'false'
@@ -123,9 +139,9 @@ class HaloLottieElement extends HTMLElement {
     return ['src', 'format', 'width', 'height', 'data-width', 'data-height', 'data-lottie-width', 'data-lottie-height', 'autoplay', 'loop', 'speed', 'fit', 'align', 'controls', 'hover-play', 'freeze-on-offscreen', 'aria-label']
   }
 
-  connectedCallback() { this.scheduleRender() }
-  disconnectedCallback() { this.removeEventListener('pointerenter', this.onEnter); this.removeEventListener('pointerleave', this.onLeave); this.destroyPlayer() }
-  attributeChangedCallback() { if (this.isConnected) this.scheduleRender() }
+  connectedCallback() { this.mountSkeleton(); this.scheduleRender() }
+  disconnectedCallback() { this.removeEventListener('pointerenter', this.onEnter); this.removeEventListener('pointerleave', this.onLeave); this.hideSkeleton(); this.destroyPlayer() }
+  attributeChangedCallback() { if (this.isConnected) { this.mountSkeleton(); this.scheduleRender() } }
 
   private scheduleRender() {
     if (this.renderScheduled) return
@@ -139,6 +155,17 @@ class HaloLottieElement extends HTMLElement {
   private destroyPlayer() {
     this.player?.destroy()
     this.player = undefined
+  }
+
+  private mountSkeleton() {
+    if (!this.getAttribute('src')) return
+    const root = this.getRootNode()
+    ensureSkeletonStyles(root instanceof ShadowRoot ? root : document)
+    this.setAttribute('data-halo-lottie-loading', 'true')
+  }
+
+  private hideSkeleton() {
+    this.removeAttribute('data-halo-lottie-loading')
   }
 
   private layout(): Layout {
@@ -187,7 +214,11 @@ class HaloLottieElement extends HTMLElement {
     if (bool(this, 'controls', false)) this.mountControls()
 
     const src = this.getAttribute('src')
-    if (!src) return
+    if (!src) {
+      this.hideSkeleton()
+      return
+    }
+    this.mountSkeleton()
     const hoverPlay = bool(this, 'hover-play', false)
     const speed = Number(this.getAttribute('speed') || 1)
     try {
@@ -195,26 +226,36 @@ class HaloLottieElement extends HTMLElement {
       if (version !== this.renderVersion || !this.isConnected) return
       const kind = sourceFormat(src, this.getAttribute('format'))
       const sourceConfig = kind === 'tgs' ? { data: source } : { src: source }
-      this.player = new DotLottie({
+      const player = new DotLottie({
         canvas, ...sourceConfig, autoplay: bool(this, 'autoplay', true) && !hoverPlay,
         loop: bool(this, 'loop', true), speed: Number.isFinite(speed) && speed > 0 ? speed : 1,
         layout: this.layout(), renderConfig: { autoResize: true, freezeOnOffscreen: bool(this, 'freeze-on-offscreen', true) },
       })
-      for (const event of ['play', 'pause', 'stop', 'complete'] as const) this.player.addEventListener(event, () => this.updateToggle())
-      this.player.addEventListener('load', () => {
-        if (!this.player) return
-        this.player.setFrame(0)
-        if (this.hoverIntent && bool(this, 'hover-play', false)) this.player.play()
+      this.player = player
+      for (const event of ['play', 'pause', 'stop', 'complete'] as const) player.addEventListener(event, () => this.updateToggle())
+      const handleLoad = () => {
+        if (this.player !== player || version !== this.renderVersion) return
+        this.hideSkeleton()
+        player.setFrame(0)
+        if (this.hoverIntent && bool(this, 'hover-play', false)) player.play()
         this.updateToggle()
-      })
-      this.player.addEventListener('loadError', (event) => this.showError(event.error))
-      this.player.addEventListener('renderError', (event) => this.showError(event.error))
+      }
+      player.addEventListener('load', handleLoad)
+      if (player.isLoaded) handleLoad()
+      const handleError = (error: unknown) => {
+        if (this.player === player && version === this.renderVersion) this.showError(error)
+      }
+      player.addEventListener('loadError', (event) => handleError(event.error))
+      player.addEventListener('renderError', (event) => handleError(event.error))
       this.addEventListener('pointerenter', this.onEnter)
       this.addEventListener('pointerleave', this.onLeave)
-    } catch (error) { this.showError(error) }
+    } catch (error) {
+      if (version === this.renderVersion && this.isConnected) this.showError(error)
+    }
   }
 
   private showError(error: unknown) {
+    this.hideSkeleton()
     const node = document.createElement('span')
     node.setAttribute('role', 'status')
     node.textContent = error instanceof Error ? error.message : 'Lottie 动画加载失败'

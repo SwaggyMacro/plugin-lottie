@@ -3,11 +3,13 @@ import { DotLottie } from './lottie/dotlottie-web.js';
 // Assets are served by Halo under /plugins/{plugin-name}/assets/{path}.
 // Resolve the runtime base from this script URL so the plugin keeps working
 // when installed under a different metadata.name or reverse-proxy prefix.
+const runtimeScript = document.currentScript || document.querySelector('script[data-halo-lottie-runtime="true"]');
 const runtimeBase = (() => {
-  const script = document.currentScript;
+  const script = runtimeScript;
   if (!script || !script.src) return '/plugins/lottie/assets';
   return new URL('.', script.src).pathname.replace(/\/$/, '');
 })();
+const skeletonEnabled = runtimeScript?.dataset.haloLottieSkeletonEnabled !== 'false';
 
 DotLottie.setWasmUrl(`${runtimeBase}/lottie/dotlottie-player.wasm`);
 
@@ -112,17 +114,30 @@ async function resolveSource(src, format) {
 
 class HaloLottie extends HTMLElement {
   static get observedAttributes() { return ['src', 'format', 'width', 'height', 'data-width', 'data-height', 'data-lottie-width', 'data-lottie-height', 'autoplay', 'loop', 'speed', 'fit', 'align', 'controls', 'hover-play', 'freeze-on-offscreen', 'aria-label']; }
+  hoverIntent = false;
   renderVersion = 0;
   renderScheduled = false;
-  connectedCallback() { this.scheduleRender(); }
-  disconnectedCallback() { this.removeEventListener('pointerenter', this.onEnter); this.removeEventListener('pointerleave', this.onLeave); this.destroyPlayer(); }
-  attributeChangedCallback() { if (this.isConnected) this.scheduleRender(); }
+  connectedCallback() { this.mountSkeleton(); this.scheduleRender(); }
+  disconnectedCallback() { this.removeEventListener('pointerenter', this.onEnter); this.removeEventListener('pointerleave', this.onLeave); this.hideSkeleton(); this.destroyPlayer(); }
+  attributeChangedCallback() { if (this.isConnected) { this.mountSkeleton(); this.scheduleRender(); } }
   scheduleRender() {
     if (this.renderScheduled) return;
     this.renderScheduled = true;
     enqueue(() => { this.renderScheduled = false; if (this.isConnected) this.render(); });
   }
   destroyPlayer() { if (this.player) { this.player.destroy(); this.player = undefined; } }
+  mountSkeleton() {
+    if (!skeletonEnabled || !this.getAttribute('src')) return;
+    const root = this.getRootNode();
+    if (root instanceof ShadowRoot && !root.querySelector('[data-halo-lottie-skeleton-style]')) {
+      const style = document.createElement('style');
+      style.setAttribute('data-halo-lottie-skeleton-style', 'true');
+      style.textContent = `@keyframes halo-lottie-loader-spin{to{transform:translate(-50%,-50%) rotate(360deg)}}@keyframes halo-lottie-loader-breathe{from{opacity:.5}to{opacity:1}}halo-lottie[data-halo-lottie-loading='true']{display:inline-flex;position:relative;width:var(--halo-lottie-width,160px);height:var(--halo-lottie-height,160px);overflow:hidden;vertical-align:middle;border-radius:var(--halo-lottie-skeleton-radius,8px);background:var(--halo-lottie-skeleton-background,#f3f4f6);box-shadow:inset 0 0 0 1px var(--halo-lottie-skeleton-frame-border,#d7dbe0)}halo-lottie[data-halo-lottie-loading='true']::before{position:absolute;z-index:1;top:50%;left:50%;width:30%;min-width:24px;max-width:56px;aspect-ratio:1;border:2px solid var(--halo-lottie-skeleton-border,#d7dbe0);border-top-color:var(--halo-lottie-skeleton-accent,#6b7280);border-radius:50%;box-shadow:0 0 0 5px var(--halo-lottie-skeleton-accent-shadow,rgb(107 114 128 / 10%));content:'';display:var(--halo-lottie-skeleton-loader-display,block);pointer-events:none;transform:translate(-50%,-50%);animation:halo-lottie-loader-spin 1.05s linear infinite}halo-lottie[data-halo-lottie-loading='true']::after{position:absolute;z-index:1;inset:0;border:1px solid var(--halo-lottie-skeleton-frame-border,#d7dbe0);border-radius:inherit;box-shadow:var(--halo-lottie-skeleton-breathe-shadow,inset 0 0 24px rgb(107 114 128 / 10%));content:'';pointer-events:none;animation:halo-lottie-loader-breathe 1.35s ease-in-out infinite alternate}@media (prefers-reduced-motion:reduce){halo-lottie[data-halo-lottie-loading='true']::before,halo-lottie[data-halo-lottie-loading='true']::after{animation:none}}`;
+      root.append(style);
+    }
+    this.setAttribute('data-halo-lottie-loading', 'true');
+  }
+  hideSkeleton() { this.removeAttribute('data-halo-lottie-loading'); }
   layout() { const fit = this.getAttribute('fit'); const align = this.getAttribute('align'); return { fit: fit && FITS.includes(fit) ? fit : 'contain', align: align && ALIGNMENTS[align] ? ALIGNMENTS[align] : ALIGNMENTS.center }; }
   updateToggle() { const button = this.controls && this.controls.querySelector('[data-toggle]'); if (!button) return; const playing = Boolean(this.player && this.player.isPlaying); button.textContent = playing ? 'Pause' : 'Play'; button.title = playing ? 'Pause animation' : 'Play animation'; button.setAttribute('aria-label', button.title); }
   async render() {
@@ -141,20 +156,26 @@ class HaloLottie extends HTMLElement {
     this.style.setProperty('height', height, 'important');
     const canvas = document.createElement('canvas'); canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', this.getAttribute('aria-label') || 'Lottie animation'); canvas.style.cssText = 'display:block;width:100%;height:100%;'; this.append(canvas);
     if (bool(this, 'controls', false)) this.mountControls();
-    const src = this.getAttribute('src'); if (!src) return;
+    const src = this.getAttribute('src'); if (!src) { this.hideSkeleton(); return; }
+    this.mountSkeleton();
     const hoverPlay = bool(this, 'hover-play', false); const speed = Number(this.getAttribute('speed') || 1);
     try {
       const source = await resolveSource(src, this.getAttribute('format'));
       if (version !== this.renderVersion || !this.isConnected) return;
       const kind = sourceFormat(src, this.getAttribute('format'));
       const sourceConfig = kind === 'tgs' ? { data: source } : { src: source };
-      this.player = new DotLottie({ canvas, ...sourceConfig, autoplay: bool(this, 'autoplay', true) && !hoverPlay, loop: bool(this, 'loop', true), speed: Number.isFinite(speed) && speed > 0 ? speed : 1, layout: this.layout(), renderConfig: { autoResize: true, freezeOnOffscreen: bool(this, 'freeze-on-offscreen', true) } });
-      ['play', 'pause', 'stop', 'complete'].forEach((event) => this.player.addEventListener(event, () => this.updateToggle()));
-      this.player.addEventListener('loadError', (event) => this.showError(event.error)); this.player.addEventListener('renderError', (event) => this.showError(event.error));
+      const player = new DotLottie({ canvas, ...sourceConfig, autoplay: bool(this, 'autoplay', true) && !hoverPlay, loop: bool(this, 'loop', true), speed: Number.isFinite(speed) && speed > 0 ? speed : 1, layout: this.layout(), renderConfig: { autoResize: true, freezeOnOffscreen: bool(this, 'freeze-on-offscreen', true) } });
+      this.player = player;
+      ['play', 'pause', 'stop', 'complete'].forEach((event) => player.addEventListener(event, () => this.updateToggle()));
+      const handleLoad = () => { if (this.player !== player || version !== this.renderVersion) return; this.hideSkeleton(); player.setFrame(0); if (this.hoverIntent && bool(this, 'hover-play', false)) player.play(); this.updateToggle(); };
+      player.addEventListener('load', handleLoad);
+      if (player.isLoaded) handleLoad();
+      const handleError = (error) => { if (this.player === player && version === this.renderVersion) this.showError(error); };
+      player.addEventListener('loadError', (event) => handleError(event.error)); player.addEventListener('renderError', (event) => handleError(event.error));
       this.addEventListener('pointerenter', this.onEnter); this.addEventListener('pointerleave', this.onLeave);
     } catch (error) { if (version === this.renderVersion && this.isConnected) this.showError(error); }
   }
-  showError(error) { const node = document.createElement('span'); node.setAttribute('role', 'status'); node.textContent = error instanceof Error ? error.message : 'Lottie animation failed to load'; node.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;padding:8px;color:#9f1239;background:#fff1f2;font:12px sans-serif;text-align:center;'; this.append(node); }
+  showError(error) { this.hideSkeleton(); const node = document.createElement('span'); node.setAttribute('role', 'status'); node.textContent = error instanceof Error ? error.message : 'Lottie animation failed to load'; node.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;padding:8px;color:#9f1239;background:#fff1f2;font:12px sans-serif;text-align:center;'; this.append(node); }
   mountControls() {
     const controls = document.createElement('span'); controls.setAttribute('role', 'group'); controls.setAttribute('aria-label', 'Animation controls'); controls.style.cssText = 'position:absolute;right:4px;bottom:4px;display:inline-flex;gap:3px;padding:3px;border-radius:4px;background:rgb(15 23 42 / 72%);';
     const toggle = document.createElement('button'); toggle.type = 'button'; toggle.dataset.toggle = 'true'; toggle.textContent = 'Play'; toggle.title = 'Play animation'; toggle.setAttribute('aria-label', toggle.title);
@@ -163,7 +184,7 @@ class HaloLottie extends HTMLElement {
     toggle.addEventListener('click', () => { if (this.player && this.player.isPlaying) this.player.pause(); else if (this.player) this.player.play(); this.updateToggle(); }); stop.addEventListener('click', () => { if (this.player) this.player.stop(); this.updateToggle(); });
     controls.append(toggle, stop); this.controls = controls; this.append(controls);
   }
-  onEnter = () => { if (bool(this, 'hover-play', false) && this.player) this.player.play(); };
-  onLeave = () => { if (bool(this, 'hover-play', false) && this.player) this.player.pause(); };
+  onEnter = () => { this.hoverIntent = true; if (bool(this, 'hover-play', false) && this.player) this.player.play(); };
+  onLeave = () => { this.hoverIntent = false; if (bool(this, 'hover-play', false) && this.player) this.player.pause(); };
 }
 if (!customElements.get('halo-lottie')) customElements.define('halo-lottie', HaloLottie);

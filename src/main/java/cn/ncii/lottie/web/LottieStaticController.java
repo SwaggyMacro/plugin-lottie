@@ -57,6 +57,9 @@ public class LottieStaticController {
         if (path.endsWith("/lottie/dotlottie-player.wasm")) {
             return resource("static/lottie/dotlottie-player.wasm", MediaType.parseMediaType("application/wasm"));
         }
+        if (path.endsWith("/lottie/lottie-skeleton.css")) {
+            return resource("static/lottie/lottie-skeleton.css", MediaType.parseMediaType("text/css"));
+        }
         return Mono.just(ResponseEntity.<byte[]>notFound().build());
     }
 

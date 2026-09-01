@@ -70,7 +70,8 @@ pnpm dev
 </halo-lottie>
 ```
 需要加载 `lottie-runtime.js`
+骨架样式可选。
 ```
+<link rel="stylesheet" href="/plugins/lottie/assets/lottie/lottie-skeleton.css">
 <script type="module" src="/plugins/lottie/assets/lottie-runtime.js"></script>
 ```
-

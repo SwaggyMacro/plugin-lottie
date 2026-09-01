@@ -85,6 +85,8 @@ public class LottieAssetWebFilter implements WebFilter {
                 MediaType.parseMediaType("application/javascript"));
             case "lottie/dotlottie-player.wasm" -> new Asset("static/lottie/dotlottie-player.wasm",
                 MediaType.parseMediaType("application/wasm"));
+            case "lottie/lottie-skeleton.css" -> new Asset("static/lottie/lottie-skeleton.css",
+                MediaType.parseMediaType("text/css"));
             default -> null;
         };
     }

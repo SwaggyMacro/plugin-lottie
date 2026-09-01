@@ -42,3 +42,46 @@ spec:
           value: 160
           min: 1
           max: 4096
+    - group: skeleton
+      label: 骨架屏
+      formSchema:
+        - $formkit: switch
+          name: skeletonEnabled
+          label: 启用骨架屏
+          value: true
+        - $formkit: switch
+          name: skeletonLoaderEnabled
+          label: 显示加载器
+          value: true
+        - $formkit: switch
+          name: skeletonBackgroundEnabled
+          label: 显示背景
+          value: true
+        - $formkit: color
+          name: skeletonBackgroundColor
+          label: 背景颜色
+          value: "#f3f4f6"
+        - $formkit: switch
+          name: skeletonBorderEnabled
+          label: 显示边框
+          value: true
+        - $formkit: color
+          name: skeletonBorderColor
+          label: 边框颜色
+          value: "#d7dbe0"
+        - $formkit: color
+          name: skeletonAccentColor
+          label: 加载指示器颜色
+          value: "#6b7280"
+        - $formkit: number
+          name: skeletonBorderRadius
+          label: 圆角（px）
+          value: 8
+          min: 0
+          max: 64
+        - $formkit: number
+          name: skeletonBackgroundOpacity
+          label: 背景透明度（%）
+          value: 100
+          min: 0
+          max: 100
