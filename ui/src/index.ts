@@ -4,7 +4,10 @@ import { markRaw } from 'vue'
 import { LottieExtension } from './editor/LottieExtension'
 import LottiePickerModal from './components/LottiePickerModal.vue'
 import LottieLibraryView from './views/LottieLibraryView.vue'
+import { startMomentsLottieInjection } from './editor/momentsInjection'
 import './runtime/lottie-element'
+
+startMomentsLottieInjection()
 
 export default definePlugin({
   components: { 'lottie-picker-modal': markRaw(LottiePickerModal) },

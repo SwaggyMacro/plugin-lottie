@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { IconMotionLine } from '@halo-dev/components'
-import { createApp, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import LottiePickerModal from './LottiePickerModal.vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import type { LottieInsertAttributes } from '../editor/lottieTypes'
 import { LOTTIE_PICKER_OPEN_EVENT, registerLottiePicker, type LottiePickerOpenRequest } from '../editor/lottiePickerBridge'
+import { openLottiePickerHost } from '../editor/lottiePickerHost'
 
 type EditorLike = {
   chain: () => {
@@ -12,56 +12,6 @@ type EditorLike = {
     }
   }
 }
-type GlobalPickerState = {
-  visible: boolean
-  initial: LottieInsertAttributes | null
-  submit: ((attributes: LottieInsertAttributes) => void) | null
-}
-
-const globalPickerState = reactive<GlobalPickerState>({
-  visible: false,
-  initial: null,
-  submit: null,
-})
-
-let globalPickerApp: ReturnType<typeof createApp> | null = null
-
-const GlobalPickerHost = defineComponent({
-  name: 'LottieGlobalPickerHost',
-  setup() {
-    const close = (visible: boolean) => {
-      globalPickerState.visible = visible
-      if (!visible) {
-        globalPickerState.initial = null
-        globalPickerState.submit = null
-      }
-    }
-    const select = (attributes: LottieInsertAttributes) => {
-      globalPickerState.submit?.(attributes)
-      close(false)
-    }
-    return () => h(LottiePickerModal, {
-      visible: globalPickerState.visible,
-      initial: globalPickerState.initial,
-      'onUpdate:visible': close,
-      onSelect: select,
-    })
-  },
-})
-
-function openGlobalPicker(initial: LottieInsertAttributes | null, submit: (attributes: LottieInsertAttributes) => void) {
-  if (!globalPickerApp) {
-    const container = document.createElement('div')
-    container.dataset.haloLottiePickerHost = 'true'
-    document.body.appendChild(container)
-    globalPickerApp = createApp(GlobalPickerHost)
-    globalPickerApp.mount(container)
-  }
-  globalPickerState.initial = initial
-  globalPickerState.submit = submit
-  globalPickerState.visible = true
-}
-
 const props = withDefaults(defineProps<{
   editor: EditorLike
   title?: string
@@ -82,7 +32,7 @@ function handleOpen(event: Event) {
   const request = (event as CustomEvent<LottiePickerOpenRequest>).detail
   if (request?.editor === props.editor) {
     editingPosition.value = typeof request.position === 'number' ? request.position : null
-    openGlobalPicker(request.initial || null, insert)
+    openLottiePickerHost(request.initial || null, insert)
   }
 }
 
@@ -91,12 +41,12 @@ function open() {
   // Open after the menu item's click event has completed. Opening during
   // pointerdown inserts the backdrop under the pointer, so the subsequent
   // click is interpreted as a backdrop click and closes the dialog.
-  openGlobalPicker(null, insert)
+  openLottiePickerHost(null, insert)
 }
 
 function handleRequest(request: LottiePickerOpenRequest) {
   editingPosition.value = typeof request.position === 'number' ? request.position : null
-  openGlobalPicker(request.initial || null, insert)
+  openLottiePickerHost(request.initial || null, insert)
 }
 
 function insert(attributes: LottieInsertAttributes) {

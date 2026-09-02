@@ -1,8 +1,10 @@
 import { Node } from '@tiptap/core'
+import { NodeSelection } from '@tiptap/pm/state'
 import { IconMotionLine } from '@halo-dev/components'
 import { markRaw } from 'vue'
 import LottieEditorAction from '../components/LottieEditorAction.vue'
 import { openLottiePicker } from './lottiePickerBridge'
+import { openLottiePickerHost } from './lottiePickerHost'
 import type { LottieInsertAttributes } from './lottieTypes'
 
 export type LottieNodeAttributes = LottieInsertAttributes
@@ -177,6 +179,12 @@ export const LottieExtension: any = Node.create({
         Object.assign(button.style, { border: '0', borderRadius: '3px', padding: '4px 7px', color: '#fff', background: 'transparent', fontSize: '12px', cursor: 'pointer' })
         button.addEventListener('pointerenter', () => { button.style.background = 'rgb(255 255 255 / 18%)' })
         button.addEventListener('pointerleave', () => { button.style.background = 'transparent' })
+        // Toolbar controls live inside a ProseMirror node view. Keep their
+        // pointer interaction from becoming a text selection in the editor.
+        button.addEventListener('pointerdown', (event) => {
+          event.preventDefault()
+          event.stopPropagation()
+        })
       }
       toolbar.append(edit, remove)
       dom.append(animation, toolbar, resizeHandle)
@@ -217,12 +225,39 @@ export const LottieExtension: any = Node.create({
         }
       }
       syncAttributes(node.attrs)
+      const updateNode = (attributes: LottieInsertAttributes) => {
+        let position: number | undefined
+        try {
+          position = getPos()
+        } catch {
+          return
+        }
+        if (typeof position !== 'number') return
+        const current = editor.state.doc.nodeAt(position)
+        if (!current || current.type !== node.type) return
+        editor.view.dispatch(editor.state.tr.setNodeMarkup(position, current.type, attributes))
+        editor.view.focus?.()
+      }
       const editNode = (event: Event) => {
         event.preventDefault()
         event.stopPropagation()
-        const position = getPos()
-        openLottiePicker(editor, { ...node.attrs }, typeof position === 'number' ? position : undefined)
+        // Moments editors do not mount the normal Lottie toolbar action, so
+        // the event bridge has no receiver there. Use the shared host directly
+        // and keep the node position dynamic while the picker is open.
+        openLottiePickerHost({ ...node.attrs }, updateNode)
       }
+      animation.addEventListener('pointerdown', (event: PointerEvent) => {
+        event.preventDefault()
+        event.stopPropagation()
+        let position: number | undefined
+        try {
+          position = getPos()
+        } catch {
+          return
+        }
+        if (typeof position !== 'number') return
+        editor.view.dispatch(editor.state.tr.setSelection(NodeSelection.create(editor.state.doc, position)))
+      })
       animation.addEventListener('click', editNode)
       edit.addEventListener('click', editNode)
       // Keep resizing local to this node and persist dimensions in the document.

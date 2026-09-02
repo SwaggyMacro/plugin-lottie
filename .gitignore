@@ -106,3 +106,5 @@ application-local.properties
 /ui/.corepack-home/
 /.tmp-showcase-2/
 /.tmp-api.jar/
+/.tmp-richtext/
+/.npm-cache/
