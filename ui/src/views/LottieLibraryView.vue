@@ -141,6 +141,9 @@ const selectedNames = ref<string[]>([])
 const selectionMode = ref(false)
 const draggingNames = ref<string[]>([])
 const dragOverName = ref('')
+const pointerDrag = ref<{ animation: Animation; pointerId: number; startX: number; startY: number; active: boolean } | null>(null)
+const dragPointer = ref({ x: 0, y: 0 })
+const suppressNextCardClick = ref(false)
 const movePositionDialogOpen = ref(false)
 const moveGroup = ref('')
 const page = ref(1)
@@ -235,6 +238,7 @@ const activeImportPreview = computed(() => {
   const source = importPreviewSources.value[importPreviewKey(candidate)]
   return source ? { candidate, source, dimensions: previewDimensions(candidate.width, candidate.height, 256) } : null
 })
+const dragPreviewAnimation = computed(() => animations.value.find((animation) => animation.metadata.name === draggingNames.value[0]) ?? null)
 
 function cloneDefaults(value?: Partial<LottieDefaults> | null): LottieDefaults {
   return { ...defaultConfig(), ...value }
@@ -671,6 +675,10 @@ async function removeAnimation(animation: Animation) {
 }
 
 function toggleSelection(animation: Animation) {
+  if (suppressNextCardClick.value) {
+    suppressNextCardClick.value = false
+    return
+  }
   const name = animation.metadata.name
   selectedNames.value = selectedNames.value.includes(name)
     ? selectedNames.value.filter((item) => item !== name)
@@ -698,7 +706,7 @@ function toggleSelectionMode() {
   }
 }
 
-function handleDragStart(animation: Animation, event: DragEvent) {
+function beginDrag(animation: Animation) {
   if (!sortableEnabled.value) return
   const ordered = groupAnimations.value.map((item) => item.metadata.name)
   const sourceName = animation.metadata.name
@@ -706,28 +714,59 @@ function handleDragStart(animation: Animation, event: DragEvent) {
     ? new Set(movableSelection.value)
     : new Set([sourceName])
   draggingNames.value = ordered.filter((name) => selected.has(name))
-  event.dataTransfer?.setData('text/plain', sourceName)
-  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
 }
 
-function handleDragOver(animation: Animation, event: DragEvent) {
-  if (!sortableEnabled.value || !draggingNames.value.length || draggingNames.value.includes(animation.metadata.name)) return
-  event.preventDefault()
-  handleDragAutoScroll(event)
-  dragOverName.value = animation.metadata.name
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+function handlePointerDown(animation: Animation, event: PointerEvent) {
+  if (!sortableEnabled.value || event.button !== 0) return
+  suppressNextCardClick.value = false
+  const target = event.target as HTMLElement | null
+  if (target?.closest('button, input, select, textarea, a, label')) return
+  dragPointer.value = { x: event.clientX, y: event.clientY }
+  pointerDrag.value = { animation, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, active: false }
+  window.addEventListener('pointermove', handlePointerMove)
+  window.addEventListener('pointerup', handlePointerUp, { once: true })
+  window.addEventListener('pointercancel', handlePointerCancel, { once: true })
 }
 
-async function handleDrop(animation: Animation, event: DragEvent) {
+function handlePointerMove(event: PointerEvent) {
+  const drag = pointerDrag.value
+  if (!drag || event.pointerId !== drag.pointerId) return
+  dragPointer.value = { x: event.clientX, y: event.clientY }
+  if (!drag.active) {
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY)
+    if (distance < 5) return
+    drag.active = true
+    suppressNextCardClick.value = true
+    beginDrag(drag.animation)
+  }
   event.preventDefault()
-  if (!sortableEnabled.value) return
-  const sourceName = event.dataTransfer?.getData('text/plain')
-  const targetName = animation.metadata.name
-  const draggedNames = draggingNames.value.length
-    ? draggingNames.value
-    : sourceName ? [sourceName] : []
+  handleDragAutoScroll(event.clientY)
+  updateDragTarget(event.clientX, event.clientY)
+}
+
+async function handlePointerUp(event: PointerEvent) {
+  const drag = pointerDrag.value
+  pointerDrag.value = null
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('pointercancel', handlePointerCancel)
+  if (!drag?.active || event.pointerId !== drag.pointerId) {
+    suppressNextCardClick.value = false
+    return
+  }
+  const targetName = dragOverName.value
+  const draggedNames = draggingNames.value.slice()
   draggingNames.value = []
   dragOverName.value = ''
+  window.setTimeout(() => { suppressNextCardClick.value = false }, 0)
+  if (!targetName) return
+  await persistDrop(targetName, draggedNames)
+}
+
+function handlePointerCancel(event: PointerEvent) {
+  void handlePointerUp(event)
+}
+
+async function persistDrop(targetName: string, draggedNames: string[]) {
   if (!draggedNames.length || draggedNames.includes(targetName)) return
   const ordered = groupAnimations.value.map((item) => item.metadata.name)
   const validDraggedNames = draggedNames.filter((name) => ordered.includes(name))
@@ -742,18 +781,25 @@ async function handleDrop(animation: Animation, event: DragEvent) {
   await persistOrder(remaining)
 }
 
-function handleDragAutoScroll(event: DragEvent) {
+function handleDragAutoScroll(clientY: number) {
   if (!draggingNames.value.length) return
   const edge = 90
   const speed = 18
-  if (event.clientY < edge) window.scrollBy({ top: -speed, behavior: 'auto' })
-  else if (event.clientY > window.innerHeight - edge) window.scrollBy({ top: speed, behavior: 'auto' })
+  if (clientY < edge) window.scrollBy({ top: -speed, behavior: 'auto' })
+  else if (clientY > window.innerHeight - edge) window.scrollBy({ top: speed, behavior: 'auto' })
+}
+
+function updateDragTarget(clientX: number, clientY: number) {
+  const target = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-animation-name]')
+  const targetName = target?.dataset.animationName ?? ''
+  dragOverName.value = targetName && !draggingNames.value.includes(targetName) ? targetName : ''
 }
 
 function handleDragWheel(event: WheelEvent) {
   if (!draggingNames.value.length || event.deltaY === 0) return
   event.preventDefault()
   window.scrollBy({ top: event.deltaY, left: event.deltaX, behavior: 'auto' })
+  updateDragTarget(dragPointer.value.x, dragPointer.value.y)
 }
 
 function handleDragKeydown(event: KeyboardEvent) {
@@ -880,6 +926,10 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   revokeImportPreviewSources()
+  pointerDrag.value = null
+  window.removeEventListener('pointermove', handlePointerMove)
+  window.removeEventListener('pointerup', handlePointerUp)
+  window.removeEventListener('pointercancel', handlePointerCancel)
   window.removeEventListener('wheel', handleDragWheel, true)
   window.removeEventListener('keydown', handleDragKeydown, true)
 })
@@ -1020,7 +1070,7 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
           </div>
         </div>
         <div v-if="selectionMode && selectedNames.length" class="bulk-bar"><span>已选择 {{ selectedNames.length }} 项</span><select v-model="moveGroup"><option value="">移出分组</option><option v-for="group in groups" :key="group.metadata.name" :value="group.metadata.name">移动到 {{ group.spec.displayName }}</option></select><button class="quiet-button" type="button" :disabled="busy || !movableSelection.length || !positionOptions.length" @click="openMovePosition">调整位置</button><button class="quiet-button" type="button" :disabled="busy" @click="bulkMove">移动</button><button class="danger-button" type="button" :disabled="busy" @click="bulkDelete">删除</button><button class="quiet-button" type="button" :disabled="busy" @click="clearSelection">取消</button></div>
-        <div v-if="displayedAnimations.length" class="grid" :class="{ sorting: sortableEnabled }"><LottieAnimationCard v-for="animation in displayedAnimations" :key="animation.metadata.name" :animation="animation" :source="source(animation)" :group-label="displayGroup(animation.spec.groupName)" :selectable="selectionMode" :selected="selectedNames.includes(animation.metadata.name)" :sortable="sortableEnabled" :dragging="draggingNames.includes(animation.metadata.name)" :drag-over="dragOverName === animation.metadata.name" @configure="openAnimation" @remove="removeAnimation" @select="toggleSelection" @dragstart="handleDragStart" @dragover="handleDragOver" @drop="handleDrop" @dragend="handleDragEnd" /></div>
+        <div v-if="displayedAnimations.length" class="grid" :class="{ sorting: sortableEnabled }"><LottieAnimationCard v-for="animation in displayedAnimations" :key="animation.metadata.name" :animation="animation" :source="source(animation)" :group-label="displayGroup(animation.spec.groupName)" :selectable="selectionMode" :selected="selectedNames.includes(animation.metadata.name)" :sortable="sortableEnabled" :dragging="draggingNames.includes(animation.metadata.name)" :drag-over="dragOverName === animation.metadata.name" @configure="openAnimation" @remove="removeAnimation" @select="toggleSelection" @pointerdown="handlePointerDown" /></div>
         <nav v-if="visibleAnimations.length" class="library-pagination" aria-label="动画分页"><button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button><span>第 {{ page }} / {{ pageCount }} 页 · 每页 {{ pageSize }} · 共 {{ visibleAnimations.length }} 个</span><button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button></nav>
         <p v-else-if="!displayedAnimations.length" class="empty">{{ search ? '没有匹配的动画。' : '暂无动画，请导入 JSON、dotLottie、TGS 或 ZIP 文件。' }}</p>
       </section>
@@ -1062,6 +1112,27 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
         />
       </div>
     </Teleport>
+    <Teleport to="body">
+      <div
+        v-if="draggingNames.length && dragPreviewAnimation"
+        class="drag-ghost"
+        :style="{ left: `${dragPointer.x}px`, top: `${dragPointer.y}px` }"
+        aria-hidden="true"
+      >
+        <LottieCanvas
+          :src="source(dragPreviewAnimation)"
+          :format="dragPreviewAnimation.spec.format"
+          :width="64"
+          :height="64"
+          :autoplay="false"
+          :loop="false"
+          :hover-play="false"
+          :freeze-on-offscreen="true"
+        />
+        <span class="drag-ghost-name">{{ dragPreviewAnimation.spec.displayName }}</span>
+        <span v-if="draggingNames.length > 1" class="drag-ghost-count">{{ draggingNames.length }}</span>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -1086,6 +1157,9 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .import-panel { margin-top: 24px; padding: 20px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; } .panel-heading, .import-options, .content-heading, .modal-header, .modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .panel-heading p { margin: 5px 0 0; color: #64748b; font-size: 13px; }
 .import-options { justify-content: flex-start; margin: 18px 0; } .import-options label { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 13px; } select, input, textarea { border: 1px solid #cbd5e1; border-radius: 4px; color: #17202a; background: #fff; } select, input { min-height: 34px; padding: 6px 9px; } textarea { padding: 8px 9px; resize: vertical; } select:focus, input:focus, textarea:focus { outline: 2px solid #99f6e4; outline-offset: 1px; border-color: #0f766e; }
 .preview-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; } .preview-row { display: grid; grid-template-columns: 52px 48px minmax(120px, 1.2fr) minmax(140px, 2fr) minmax(80px, 1fr); gap: 10px; align-items: center; min-height: 58px; padding: 8px 10px; color: #475569; font-size: 13px; background: #f8fafc; } .preview-media { display: grid; width: 48px; height: 48px; place-items: center; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 4px; background: repeating-conic-gradient(#f8fafc 0 25%, #eef2f7 0 50%) 50% / 12px 12px; cursor: zoom-in; } .preview-media:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; } .preview-media.unavailable { color: #94a3b8; cursor: default; } .format-badge { color: #0f766e; font-size: 11px; font-weight: 700; } .preview-name { color: #17202a; font-weight: 600; } .preview-source, .preview-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .import-preview-popover { position: fixed; z-index: 60; display: grid; width: 256px; height: 256px; place-items: center; overflow: hidden; border: 1px solid #94a3b8; border-radius: 5px; background: repeating-conic-gradient(#fff 0 25%, #f1f5f9 0 50%) 50% / 16px 16px; box-shadow: 0 16px 32px rgb(15 23 42 / 20%); pointer-events: none; }
+.drag-ghost { position: fixed; z-index: 100; display: grid; width: 170px; min-height: 94px; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; padding: 10px; overflow: hidden; border: 1px solid #0f766e; border-radius: 6px; color: #17202a; background: #fff; box-shadow: 0 12px 28px rgb(15 23 42 / 24%); pointer-events: none; transform: translate(-18px, -18px); }
+.drag-ghost-name { overflow: hidden; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.drag-ghost-count { position: absolute; top: -7px; right: -7px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #fff; background: #0f766e; font-size: 11px; font-weight: 700; }
 .toolbar { display: flex; align-items: center; gap: 10px; margin: 24px 0 18px; } .search-field { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; max-width: 520px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #64748b; } .search-field input { width: 100%; min-height: 38px; padding: 7px 0; border: 0; outline: 0; } .filter-field, .filter-select { flex: 0 1 190px; min-height: 38px; padding: 7px 10px; } .result-count, .loading-label { color: #64748b; font-size: 13px; white-space: nowrap; }
 .library-layout { display: grid; grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); gap: 28px; align-items: stretch; min-width: 0; } .library-layout > :deep(.sidebar) { position: sticky; top: 0; align-self: start; height: calc(100vh - 24px); } .content-panel { min-width: 0; } .content-heading { position: sticky; top: 0; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; margin-bottom: 16px; padding: 12px 0; background: #f8fafc; } .content-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; flex-wrap: wrap; } .content-heading-row > div:first-child { min-width: 0; } .content-heading > .notices { width: 100%; } .content-heading h2 { font-size: 22px; } .bulk-bar, .grid { position: relative; z-index: 0; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; } .grid.sorting { user-select: none; } .animation-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; overflow: hidden; } .animation-card.disabled { opacity: .65; } .card-preview { display: grid; min-height: 190px; position: relative; place-items: center; padding: 16px; background: linear-gradient(135deg, #f8fafc 25%, #f1f5f9 25%, #f1f5f9 50%, #f8fafc 50%, #f8fafc 75%, #f1f5f9 75%); background-size: 16px 16px; } .disabled-label { position: absolute; top: 9px; right: 9px; padding: 3px 6px; border-radius: 3px; color: #475569; background: #e2e8f0; font-size: 11px; } .card-body { display: grid; gap: 5px; min-width: 0; padding: 13px 14px 5px; } .card-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .card-meta, .card-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 12px; } .card-actions { display: flex; gap: 8px; padding: 9px 14px 13px; } .card-actions button { flex: 1; padding: 6px 8px; font-size: 12px; }
 .content-actions { display: inline-flex; align-items: center; gap: 8px; } .page-size-control { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 13px; white-space: nowrap; } .page-size-control select { min-height: 34px; padding: 5px 7px; }
