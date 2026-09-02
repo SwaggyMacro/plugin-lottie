@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { axiosInstance } from '@halo-dev/api-client'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import LottieCanvas from '../components/LottieCanvas.vue'
 import LottieAnimationCard from '../components/library/LottieAnimationCard.vue'
 import LottieAnimationDialog from '../components/library/LottieAnimationDialog.vue'
 import LottieGroupDialog from '../components/library/LottieGroupDialog.vue'
@@ -8,6 +9,12 @@ import LottieGroupSidebar from '../components/library/LottieGroupSidebar.vue'
 import AttachmentPickerModal, { type AttachmentLike } from '../components/library/AttachmentPickerModal.vue'
 import ActionConfirmDialog from '../components/library/ActionConfirmDialog.vue'
 import { readLottieDimensions } from '../utils/lottieDimensions'
+import {
+  importPreviewKey,
+  previewDimensions,
+  resolveImportPreviewSources,
+  type ImportPreviewSource,
+} from '../utils/importPreviewSources'
 
 const API_BASE = '/apis/console.api.lottie.halo.run/v1alpha1'
 const UNGROUPED = '__ungrouped__'
@@ -65,6 +72,8 @@ type ImportCandidate = {
   attachmentUrl?: string | null
   tags?: string[]
   sha256: string
+  width?: number
+  height?: number
 }
 
 type GroupDraft = {
@@ -132,6 +141,9 @@ const pageSize = ref(24)
 const fileInput = ref<HTMLInputElement | null>(null)
 const pendingFiles = ref<File[]>([])
 const importPreview = ref<ImportCandidate[]>([])
+const importPreviewSources = ref<Record<string, ImportPreviewSource>>({})
+const activeImportPreviewKey = ref('')
+const importPreviewPosition = ref({ left: 0, top: 0 })
 const duplicateMode = ref<'skip' | 'overwrite' | 'duplicate' | 'rename'>('skip')
 const attachmentGroupName = ref('')
 const attachmentPolicyName = ref('')
@@ -153,6 +165,7 @@ const confirmLabel = ref('确认删除')
 const confirmAttachmentOption = ref(false)
 const confirmAttachmentChecked = ref(false)
 const confirmAction = ref<ConfirmAction | null>(null)
+let revokeImportPreviewSources = () => {}
 
 const visibleAnimations = computed(() => {
   const keyword = search.value.trim().toLocaleLowerCase()
@@ -185,6 +198,12 @@ const selectedGroupLabel = computed(() => {
 })
 const enabledCount = computed(() => animations.value.filter((item) => item.spec.enabled !== false).length)
 const taggedCount = computed(() => animations.value.filter((item) => (item.spec.tags?.length ?? 0) > 0).length)
+const activeImportPreview = computed(() => {
+  const candidate = importPreview.value.find((item) => importPreviewKey(item) === activeImportPreviewKey.value)
+  if (!candidate) return null
+  const source = importPreviewSources.value[importPreviewKey(candidate)]
+  return source ? { candidate, source, dimensions: previewDimensions(candidate.width, candidate.height, 256) } : null
+})
 
 function cloneDefaults(value?: Partial<LottieDefaults> | null): LottieDefaults {
   return { ...defaultConfig(), ...value }
@@ -255,8 +274,12 @@ async function load() {
 }
 
 function resetImport() {
+  revokeImportPreviewSources()
+  revokeImportPreviewSources = () => {}
   pendingFiles.value = []
   importPreview.value = []
+  importPreviewSources.value = {}
+  activeImportPreviewKey.value = ''
   targetGroupName.value = ''
   attachmentGroupName.value = ''
   attachmentPolicyName.value = ''
@@ -285,7 +308,12 @@ async function handleFileChange(event: Event) {
       for (const file of files) fallback.append('file', file)
       response = await axiosInstance.post<ImportCandidate[]>(`${API_BASE}/import/preview`, fallback)
     }
-    importPreview.value = response.data ?? []
+    const candidates = response.data ?? []
+    const resolvedSources = await resolveImportPreviewSources(files, candidates)
+    revokeImportPreviewSources()
+    revokeImportPreviewSources = resolvedSources.revoke
+    importPreviewSources.value = resolvedSources.sources
+    importPreview.value = candidates
     message.value = `已识别 ${importPreview.value.length} 个动画，请确认导入`
   } catch (error) {
     errorMessage.value = errorText(error)
@@ -293,6 +321,33 @@ async function handleFileChange(event: Event) {
   } finally {
     busy.value = false
   }
+}
+
+function sourceForImportPreview(candidate: ImportCandidate): ImportPreviewSource | undefined {
+  return importPreviewSources.value[importPreviewKey(candidate)]
+}
+
+function previewSize(candidate: ImportCandidate, maximumSize: number) {
+  return previewDimensions(candidate.width, candidate.height, maximumSize)
+}
+
+function showImportPreview(candidate: ImportCandidate, target: HTMLElement) {
+  if (!sourceForImportPreview(candidate)) return
+  const rect = target.getBoundingClientRect()
+  const popoverSize = 256
+  const gap = 12
+  const left = rect.right + gap + popoverSize <= window.innerWidth
+    ? rect.right + gap
+    : Math.max(gap, rect.left - gap - popoverSize)
+  importPreviewPosition.value = {
+    left,
+    top: Math.min(Math.max(gap, rect.top), Math.max(gap, window.innerHeight - popoverSize - gap)),
+  }
+  activeImportPreviewKey.value = importPreviewKey(candidate)
+}
+
+function hideImportPreview(candidate: ImportCandidate) {
+  if (activeImportPreviewKey.value === importPreviewKey(candidate)) activeImportPreviewKey.value = ''
 }
 
 async function confirmImport() {
@@ -605,6 +660,7 @@ async function bulkMove() {
 }
 
 onMounted(load)
+onBeforeUnmount(() => revokeImportPreviewSources())
 watch([search, selectedGroup], () => { page.value = 1 })
 watch([tagFilter, enabledFilter, pageSize], () => { page.value = 1 })
 watch(pageCount, (count) => { if (page.value > count) page.value = count })
@@ -670,6 +726,31 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
       </div>
       <div class="preview-list">
         <div v-for="candidate in importPreview" :key="`${candidate.sourceFileName}-${candidate.sha256}`" class="preview-row">
+          <div
+            class="preview-media"
+            :class="{ unavailable: !sourceForImportPreview(candidate) }"
+            tabindex="0"
+            :aria-label="`${candidate.displayName} 的动画预览`"
+            @pointerenter="showImportPreview(candidate, $event.currentTarget as HTMLElement)"
+            @pointerleave="hideImportPreview(candidate)"
+            @focusin="showImportPreview(candidate, $event.currentTarget as HTMLElement)"
+            @focusout="hideImportPreview(candidate)"
+            @keydown.esc.prevent="hideImportPreview(candidate)"
+          >
+            <LottieCanvas
+              v-if="sourceForImportPreview(candidate)"
+              :src="sourceForImportPreview(candidate)!.src"
+              :format="sourceForImportPreview(candidate)!.format"
+              :width="previewSize(candidate, 42).width"
+              :height="previewSize(candidate, 42).height"
+              :autoplay="false"
+              :loop="false"
+              :hover-play="false"
+              :freeze-on-offscreen="true"
+              :aria-label="`${candidate.displayName} 的首帧预览`"
+            />
+            <span v-else aria-hidden="true">-</span>
+          </div>
           <span class="format-badge">{{ candidate.format }}</span>
           <span class="preview-name">{{ candidate.displayName }}</span>
           <span class="preview-source">{{ candidate.sourceFileName }}</span>
@@ -725,6 +806,27 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
       @update:attachment-checked="confirmAttachmentChecked = $event"
       @confirm="runConfirmedAction"
     />
+    <Teleport to="body">
+      <div
+        v-if="activeImportPreview"
+        class="import-preview-popover"
+        role="tooltip"
+        :aria-label="`${activeImportPreview.candidate.displayName} 的 256 像素预览`"
+        :style="{ left: `${importPreviewPosition.left}px`, top: `${importPreviewPosition.top}px` }"
+      >
+        <LottieCanvas
+          :src="activeImportPreview.source.src"
+          :format="activeImportPreview.source.format"
+          :width="activeImportPreview.dimensions.width"
+          :height="activeImportPreview.dimensions.height"
+          :autoplay="true"
+          :loop="true"
+          :hover-play="false"
+          :freeze-on-offscreen="true"
+          :aria-label="`${activeImportPreview.candidate.displayName} 的首帧预览`"
+        />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -748,7 +850,7 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .stat span { color: #64748b; font-size: 12px; }.stat strong { color: #0f766e; font-size: 22px; line-height: 1; }
 .import-panel { margin-top: 24px; padding: 20px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; } .panel-heading, .import-options, .content-heading, .modal-header, .modal-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .panel-heading p { margin: 5px 0 0; color: #64748b; font-size: 13px; }
 .import-options { justify-content: flex-start; margin: 18px 0; } .import-options label { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 13px; } select, input, textarea { border: 1px solid #cbd5e1; border-radius: 4px; color: #17202a; background: #fff; } select, input { min-height: 34px; padding: 6px 9px; } textarea { padding: 8px 9px; resize: vertical; } select:focus, input:focus, textarea:focus { outline: 2px solid #99f6e4; outline-offset: 1px; border-color: #0f766e; }
-.preview-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; } .preview-row { display: grid; grid-template-columns: 58px minmax(120px, 1.2fr) minmax(140px, 2fr) minmax(80px, 1fr); gap: 10px; align-items: center; padding: 8px 10px; color: #475569; font-size: 13px; background: #f8fafc; } .format-badge { color: #0f766e; font-size: 11px; font-weight: 700;  } .preview-name { color: #17202a; font-weight: 600; } .preview-source, .preview-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; } .preview-row { display: grid; grid-template-columns: 52px 48px minmax(120px, 1.2fr) minmax(140px, 2fr) minmax(80px, 1fr); gap: 10px; align-items: center; min-height: 58px; padding: 8px 10px; color: #475569; font-size: 13px; background: #f8fafc; } .preview-media { display: grid; width: 48px; height: 48px; place-items: center; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 4px; background: repeating-conic-gradient(#f8fafc 0 25%, #eef2f7 0 50%) 50% / 12px 12px; cursor: zoom-in; } .preview-media:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; } .preview-media.unavailable { color: #94a3b8; cursor: default; } .format-badge { color: #0f766e; font-size: 11px; font-weight: 700; } .preview-name { color: #17202a; font-weight: 600; } .preview-source, .preview-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .import-preview-popover { position: fixed; z-index: 60; display: grid; width: 256px; height: 256px; place-items: center; overflow: hidden; border: 1px solid #94a3b8; border-radius: 5px; background: repeating-conic-gradient(#fff 0 25%, #f1f5f9 0 50%) 50% / 16px 16px; box-shadow: 0 16px 32px rgb(15 23 42 / 20%); pointer-events: none; }
 .toolbar { display: flex; align-items: center; gap: 10px; margin: 24px 0 18px; } .search-field { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; max-width: 520px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #64748b; } .search-field input { width: 100%; min-height: 38px; padding: 7px 0; border: 0; outline: 0; } .filter-field, .filter-select { flex: 0 1 190px; min-height: 38px; padding: 7px 10px; } .result-count, .loading-label { color: #64748b; font-size: 13px; white-space: nowrap; }
 .library-layout { display: grid; grid-template-columns: minmax(220px, 250px) minmax(0, 1fr); gap: 28px; align-items: start; min-width: 0; } .library-layout > :deep(.sidebar) { position: sticky; top: 20px; } .sidebar { width: 100%; padding: 16px 12px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; } .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 12px; border-bottom: 1px solid #e2e8f0; } .sidebar-heading h2 { font-size: 15px; } .group-list { display: grid; gap: 3px; padding-top: 8px; max-height: calc(100vh - 230px); overflow-y: auto; } .group-list > button, .group-select { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; border-radius: 4px; padding: 9px; color: #475569; background: transparent; text-align: left; font-size: 13px; } .group-list > button:hover, .group-item:hover { background: #f8fafc; } .group-list > button.active, .group-item.active { color: #0f766e; background: #f0fdfa; } .group-list button span { color: #94a3b8; font-size: 12px; } .group-item { display: flex; align-items: center; border-radius: 4px; } .group-item .group-select { flex: 1; } .group-actions { display: none; gap: 2px; padding-right: 5px; } .group-item:hover .group-actions, .group-item.active .group-actions { display: flex; } .group-actions button { border: 0; padding: 3px; color: #64748b; background: transparent; font-size: 11px; }
 .content-panel { min-width: 0; } .content-heading { margin-bottom: 16px; } .content-heading h2 { font-size: 22px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; } .animation-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; overflow: hidden; } .animation-card.disabled { opacity: .65; } .card-preview { display: grid; min-height: 190px; position: relative; place-items: center; padding: 16px; background: linear-gradient(135deg, #f8fafc 25%, #f1f5f9 25%, #f1f5f9 50%, #f8fafc 50%, #f8fafc 75%, #f1f5f9 75%); background-size: 16px 16px; } .disabled-label { position: absolute; top: 9px; right: 9px; padding: 3px 6px; border-radius: 3px; color: #475569; background: #e2e8f0; font-size: 11px; } .card-body { display: grid; gap: 5px; min-width: 0; padding: 13px 14px 5px; } .card-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .card-meta, .card-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 12px; } .card-actions { display: flex; gap: 8px; padding: 9px 14px 13px; } .card-actions button { flex: 1; padding: 6px 8px; font-size: 12px; }
@@ -760,6 +862,6 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .empty { padding: 70px 20px; color: #64748b; text-align: center; border: 1px dashed #cbd5e1; border-radius: 6px; background: #fff; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgb(15 23 42 / 45%); } .modal { width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 22px; border-radius: 7px; background: #fff; box-shadow: 0 20px 50px rgb(15 23 42 / 20%); } .animation-modal { width: min(700px, 100%); } .modal-header { align-items: flex-start; margin-bottom: 20px; } .form { display: grid; gap: 16px; } .form > label, fieldset > label { display: grid; gap: 6px; color: #475569; font-size: 13px; } fieldset { display: grid; gap: 14px; margin: 0; padding: 14px; border: 1px solid #e2e8f0; border-radius: 5px; } legend { padding: 0 5px; color: #17202a; font-size: 13px; font-weight: 700; } .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; } .form-grid label { display: grid; gap: 5px; color: #64748b; font-size: 12px; } .toggle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; } .checkbox-label { display: flex !important; align-items: center; gap: 7px; color: #475569 !important; } .checkbox-label input { min-height: auto; accent-color: #0f766e; } .modal-actions { justify-content: flex-end; padding-top: 4px; } details { color: #64748b; font-size: 12px; } summary { cursor: pointer; color: #475569; font-weight: 600; } .resource-meta { margin: 8px 0 0; line-height: 1.7; overflow-wrap: anywhere; }
 @media (max-width: 820px) { .library { min-height: 100vh; padding: 24px 20px 40px; } .library-layout { grid-template-columns: 1fr; } .library-layout > :deep(.sidebar) { position: static; } .sidebar { padding: 12px; } .group-list { display: flex; flex-wrap: wrap; max-height: none; } .group-list > button, .group-item { width: auto; } .group-item .group-select { width: auto; } .group-actions { display: flex; } }
-@media (max-width: 560px) { .page-header, .toolbar, .import-options { align-items: stretch; flex-direction: column; } .header-actions { width: 100%; } .header-actions > * { flex: 1; } .upload-button { width: 100%; } .search-field, .filter-field, .filter-select { width: 100%; max-width: none; flex-basis: auto; } .preview-row { grid-template-columns: 50px minmax(0, 1fr); } .preview-source, .preview-group { grid-column: 2; } .form-grid { grid-template-columns: 1fr 1fr; } .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .page-header, .toolbar, .import-options { align-items: stretch; flex-direction: column; } .header-actions { width: 100%; } .header-actions > * { flex: 1; } .upload-button { width: 100%; } .search-field, .filter-field, .filter-select { width: 100%; max-width: none; flex-basis: auto; } .preview-row { grid-template-columns: 52px minmax(0, 1fr); gap: 5px 10px; } .preview-media { grid-row: span 4; } .format-badge, .preview-name, .preview-source, .preview-group { grid-column: 2; } .form-grid { grid-template-columns: 1fr 1fr; } .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 
