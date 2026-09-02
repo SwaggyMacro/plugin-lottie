@@ -10,7 +10,7 @@ metadata:
     rbac.authorization.halo.run/ui-permissions: '["plugin:lottie:manage"]'
 rules:
   - apiGroups: ["console.api.lottie.halo.run"]
-    resources: ["lottie/animations", "lottie/groups", "lottie/attachments", "lottie/attachment-groups", "lottie/import", "lottie/animations/import"]
+    resources: ["lottie/animations", "lottie/groups", "lottie/attachments", "lottie/attachment-groups", "lottie/import", "lottie/animations/import", "lottie/picker-recent"]
     verbs: ["get", "list", "create", "update", "delete"]
 ---
 apiVersion: v1alpha1

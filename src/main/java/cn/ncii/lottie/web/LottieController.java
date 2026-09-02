@@ -3,6 +3,7 @@ package cn.ncii.lottie.web;
 import cn.ncii.lottie.extension.LottieAnimation;
 import cn.ncii.lottie.extension.LottieConfig;
 import cn.ncii.lottie.extension.LottieGroup;
+import cn.ncii.lottie.extension.LottiePickerPreference;
 import cn.ncii.lottie.service.LottieCatalogService;
 import java.io.IOException;
 import java.util.List;
@@ -25,6 +26,7 @@ import reactor.core.publisher.Flux;
 import run.halo.app.plugin.ApiVersion;
 import run.halo.app.extension.ListOptions;
 import run.halo.app.extension.ReactiveExtensionClient;
+import run.halo.app.extension.Metadata;
 import org.springframework.data.domain.Sort;
 import run.halo.app.core.extension.attachment.Attachment;
 import run.halo.app.core.extension.attachment.Policy;
@@ -106,6 +108,43 @@ public class LottieController {
     @GetMapping("/settings")
     public Mono<LottieCatalogService.EffectiveSettings> settings() {
         return catalog.effectiveSettings();
+    }
+
+    @GetMapping("/picker-recent")
+    public Mono<List<String>> pickerRecent() {
+        return extensionClient.fetch(LottiePickerPreference.class, "lottie-picker-preferences")
+            .map(preference -> preference.getSpec() == null || preference.getSpec().getRecentNames() == null
+                ? List.<String>of() : List.copyOf(preference.getSpec().getRecentNames()))
+            .defaultIfEmpty(List.<String>of());
+    }
+
+    @PostMapping("/picker-recent")
+    public Mono<List<String>> savePickerRecent(@RequestBody PickerRecentRequest request) {
+        List<String> names = request == null || request.names() == null ? List.of() : request.names();
+        return catalog.effectiveSettings().flatMap(settings -> {
+            List<String> normalized = names.stream()
+                .filter(name -> name != null && !name.isBlank())
+                .map(String::trim)
+                .distinct()
+                .limit(settings.maxRecentItems())
+                .toList();
+            return extensionClient.fetch(LottiePickerPreference.class, "lottie-picker-preferences")
+                .defaultIfEmpty(new LottiePickerPreference())
+                .flatMap(preference -> {
+                    if (preference.getMetadata() == null) {
+                        preference.setMetadata(new Metadata());
+                    }
+                    preference.getMetadata().setName("lottie-picker-preferences");
+                    if (preference.getSpec() == null) {
+                        preference.setSpec(new LottiePickerPreference.Spec());
+                    }
+                    preference.getSpec().setRecentNames(normalized);
+                    return extensionClient.fetch(LottiePickerPreference.class, "lottie-picker-preferences")
+                        .flatMap(current -> { preference.setMetadata(current.getMetadata()); return extensionClient.update(preference); })
+                        .switchIfEmpty(Mono.defer(() -> extensionClient.create(preference)));
+                })
+                .map(preference -> normalized);
+        });
     }
 
     /**
@@ -336,4 +375,5 @@ public class LottieController {
     public record AttachmentGroup(String name, String displayName, long totalAttachments) {}
     public record AttachmentPolicy(String name, String displayName) {}
     public record AttachmentResolveRequest(List<String> references) {}
+    public record PickerRecentRequest(List<String> names) {}
 }

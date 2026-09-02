@@ -2,6 +2,7 @@ package cn.ncii.lottie;
 
 import cn.ncii.lottie.extension.LottieAnimation;
 import cn.ncii.lottie.extension.LottieGroup;
+import cn.ncii.lottie.extension.LottiePickerPreference;
 import org.springframework.stereotype.Component;
 import run.halo.app.extension.SchemeManager;
 import run.halo.app.extension.Scheme;
@@ -23,11 +24,13 @@ public class LottiePlugin extends BasePlugin {
     public void start() {
         schemeManager.register(LottieGroup.class);
         schemeManager.register(LottieAnimation.class);
+        schemeManager.register(LottiePickerPreference.class);
     }
 
     @Override
     public void stop() {
         schemeManager.unregister(Scheme.buildFromType(LottieAnimation.class));
         schemeManager.unregister(Scheme.buildFromType(LottieGroup.class));
+        schemeManager.unregister(Scheme.buildFromType(LottiePickerPreference.class));
     }
 }

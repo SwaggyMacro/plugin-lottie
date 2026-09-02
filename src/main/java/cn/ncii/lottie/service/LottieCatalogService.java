@@ -87,7 +87,7 @@ public class LottieCatalogService {
     /** Returns the effective import/insertion defaults from plugin settings. */
     public Mono<EffectiveSettings> effectiveSettings() {
         // Prefer intrinsic animation dimensions by default; configured values remain fallback.
-        EffectiveSettings fallback = new EffectiveSettings(true, 160, 160, DEFAULT_MAX_FILES);
+        EffectiveSettings fallback = new EffectiveSettings(true, 160, 160, DEFAULT_MAX_FILES, 12);
         if (settingFetcher == null) return Mono.just(fallback);
         return settingFetcher.fetch("general", PluginSettings.class)
             .map(settings -> settings == null ? fallback : settings.toEffective())
@@ -1071,17 +1071,19 @@ public class LottieCatalogService {
         public Boolean readAnimationDimensions = true;
         public Integer defaultWidth = 160;
         public Integer defaultHeight = 160;
+        public Integer maxRecentItems = 12;
 
         EffectiveSettings toEffective() {
             return new EffectiveSettings(Boolean.TRUE.equals(readAnimationDimensions),
                 clampDimension(defaultWidth == null ? 160 : defaultWidth),
                 clampDimension(defaultHeight == null ? 160 : defaultHeight),
-                maxFiles == null || maxFiles < 1 ? DEFAULT_MAX_FILES : maxFiles);
+                maxFiles == null || maxFiles < 1 ? DEFAULT_MAX_FILES : maxFiles,
+                maxRecentItems == null || maxRecentItems < 1 ? 12 : Math.min(maxRecentItems, 100));
         }
     }
 
     public record EffectiveSettings(boolean readAnimationDimensions, int defaultWidth, int defaultHeight,
-                                    int maxFiles) {}
+                                    int maxFiles, int maxRecentItems) {}
 
     public record ImportCandidate(String sourceFileName, String displayName, String groupName,
                                   String format, String mediaType, @JsonIgnore String content,

@@ -22,9 +22,16 @@ spec:
         - $formkit: number
           name: maxFiles
           label: ZIP 文件数量上限
-          value: 100
+          value: 200
           min: 1
           max: 10000
+        - $formkit: number
+          name: maxRecentItems
+          label: 最近使用最多保留数量
+          help: 插入对话框中记录的最近使用动画数量，修改后对所有设备生效。
+          value: 50
+          min: 1
+          max: 500
         - $formkit: checkbox
           name: readAnimationDimensions
           label: 从动画文件读取默认宽高
