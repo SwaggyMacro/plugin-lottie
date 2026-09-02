@@ -66,7 +66,7 @@ public class LottieController {
     public Mono<LottieAnimation> saveAnimation(@RequestBody AnimationRequest request) {
         return catalog.saveAnimation(request.name(), request.displayName(), request.groupName(), request.format(),
             request.mediaType(), request.attachmentName(), request.attachmentUrl(), request.sha256(),
-            request.defaults(), request.sourceFileName(), request.enabled(), request.tags());
+            request.defaults(), request.sourceFileName(), request.enabled(), request.tags(), request.sort());
     }
 
     /** Explicit update route for clients that prefer REST semantics. */
@@ -75,7 +75,7 @@ public class LottieController {
                                                   @RequestBody AnimationRequest request) {
         return catalog.saveAnimation(name, request.displayName(), request.groupName(), request.format(),
             request.mediaType(), request.attachmentName(), request.attachmentUrl(), request.sha256(),
-            request.defaults(), request.sourceFileName(), request.enabled(), request.tags());
+            request.defaults(), request.sourceFileName(), request.enabled(), request.tags(), request.sort());
     }
 
     @DeleteMapping("/animations/{name}")
@@ -93,6 +93,11 @@ public class LottieController {
     @PostMapping("/animations/bulk-move")
     public Mono<Void> bulkMove(@RequestBody BulkMoveRequest request) {
         return catalog.bulkMove(request.names(), request.groupName());
+    }
+
+    @PostMapping("/animations/reorder")
+    public Mono<Void> reorderAnimations(@RequestBody ReorderRequest request) {
+        return catalog.reorderAnimations(request.groupName(), request.names());
     }
 
     @DeleteMapping("/groups/{name}")
@@ -366,11 +371,26 @@ public class LottieController {
 
     public record AnimationRequest(String name, String displayName, String groupName, String format,
                                    String mediaType, String attachmentName, String attachmentUrl, String sha256,
-                                   LottieConfig defaults, String sourceFileName, Boolean enabled, List<String> tags) {}
+                                   LottieConfig defaults, String sourceFileName, Boolean enabled, List<String> tags,
+                                   Integer sort) {
+        public AnimationRequest(String name, String displayName, String groupName, String format,
+                                 String mediaType, String attachmentName, String attachmentUrl, String sha256,
+                                 LottieConfig defaults, String sourceFileName, Boolean enabled, List<String> tags) {
+            this(name, displayName, groupName, format, mediaType, attachmentName, attachmentUrl, sha256,
+                defaults, sourceFileName, enabled, tags, null);
+        }
+    }
+
+    @PostMapping("/groups/reorder")
+    public Mono<Void> reorderGroups(@RequestBody ReorderGroupsRequest request) {
+        return catalog.reorderGroups(request.names());
+    }
     public record GroupRequest(String name, String displayName, String parentName, String description,
                                Integer sort) {}
     public record BulkRequest(List<String> names, Boolean deleteAttachment) {}
     public record BulkMoveRequest(List<String> names, String groupName) {}
+    public record ReorderRequest(String groupName, List<String> names) {}
+    public record ReorderGroupsRequest(List<String> names) {}
     public record AttachmentPage(List<Attachment> items, int total, int page, int size) {}
     public record AttachmentGroup(String name, String displayName, long totalAttachments) {}
     public record AttachmentPolicy(String name, String displayName) {}

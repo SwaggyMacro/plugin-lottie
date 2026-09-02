@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import LottieCanvas from '../components/LottieCanvas.vue'
 import LottieAnimationCard from '../components/library/LottieAnimationCard.vue'
 import LottieAnimationDialog from '../components/library/LottieAnimationDialog.vue'
+import AnimationPositionDialog, { type AnimationPositionOption } from '../components/library/AnimationPositionDialog.vue'
 import LottieGroupDialog from '../components/library/LottieGroupDialog.vue'
 import LottieGroupSidebar from '../components/library/LottieGroupSidebar.vue'
 import AttachmentPickerModal, { type AttachmentLike } from '../components/library/AttachmentPickerModal.vue'
@@ -38,6 +39,7 @@ type Animation = {
   spec: {
     displayName: string
     format: string
+    sort?: number | null
     mediaType?: string
     attachmentUrl?: string | null
     attachmentName?: string | null
@@ -96,6 +98,7 @@ type AnimationDraft = {
   tags: string[]
   sourceFileName: string
   enabled: boolean
+  sort: number
   defaults: LottieDefaults
 }
 
@@ -132,8 +135,13 @@ const loading = ref(false)
 const busy = ref(false)
 const message = ref('')
 const errorMessage = ref('')
+const messageTime = ref<Date | null>(null)
+const errorMessageTime = ref<Date | null>(null)
 const selectedNames = ref<string[]>([])
 const selectionMode = ref(false)
+const draggingNames = ref<string[]>([])
+const dragOverName = ref('')
+const movePositionDialogOpen = ref(false)
 const moveGroup = ref('')
 const page = ref(1)
 const pageSize = ref(24)
@@ -167,9 +175,14 @@ const confirmAttachmentChecked = ref(false)
 const confirmAction = ref<ConfirmAction | null>(null)
 let revokeImportPreviewSources = () => {}
 
+function compareAnimations(left: Animation, right: Animation): number {
+  const bySort = (left.spec.sort ?? 0) - (right.spec.sort ?? 0)
+  return bySort || left.metadata.name.localeCompare(right.metadata.name, undefined, { sensitivity: 'base' })
+}
+
 const visibleAnimations = computed(() => {
   const keyword = search.value.trim().toLocaleLowerCase()
-  return animations.value.filter((animation) => {
+  const result = animations.value.filter((animation) => {
     const belongsToGroup = selectedGroup.value === UNGROUPED
       ? !animation.spec.groupName
       : !selectedGroup.value || animation.spec.groupName === selectedGroup.value
@@ -187,9 +200,27 @@ const visibleAnimations = computed(() => {
     ].join(' ').toLocaleLowerCase()
     return haystack.includes(keyword)
   })
+  return selectedGroup.value ? result.sort(compareAnimations) : result
 })
 const pageCount = computed(() => Math.max(1, Math.ceil(visibleAnimations.value.length / pageSize.value)))
 const pagedAnimations = computed(() => visibleAnimations.value.slice((page.value - 1) * pageSize.value, page.value * pageSize.value))
+const groupAnimations = computed(() => animations.value
+  .filter((animation) => selectedGroup.value === UNGROUPED
+    ? !animation.spec.groupName
+    : Boolean(selectedGroup.value) && animation.spec.groupName === selectedGroup.value)
+  .slice()
+  .sort(compareAnimations))
+const displayedAnimations = pagedAnimations
+const selectedGroupNames = computed(() => new Set(groupAnimations.value.map((item) => item.metadata.name)))
+const movableSelection = computed(() => selectedNames.value.filter((name) => selectedGroupNames.value.has(name)))
+const positionOptions = computed<AnimationPositionOption[]>(() => groupAnimations.value
+  .filter((animation) => !selectedNames.value.includes(animation.metadata.name))
+  .map((animation) => ({ animation, source: source(animation) })))
+const sortableEnabled = computed(() => Boolean(selectedGroup.value) && !busy.value)
+const sortableGroups = computed(() => groups.value.slice().sort((left, right) => {
+  const bySort = (left.spec.sort ?? 0) - (right.spec.sort ?? 0)
+  return bySort || left.spec.displayName.localeCompare(right.spec.displayName, undefined, { sensitivity: 'base' })
+}))
 
 const selectedGroupLabel = computed(() => {
   if (selectedGroup.value === UNGROUPED) return '未分组'
@@ -239,6 +270,24 @@ function errorText(error: unknown): string {
   return candidate?.message || '请求失败，请稍后重试'
 }
 
+const noticeTimeFormatter = new Intl.DateTimeFormat('zh-CN', {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+})
+
+function formatNoticeTime(value: Date | null): string {
+  return value ? noticeTimeFormatter.format(value) : ''
+}
+
+function showMessage(value: string) {
+  message.value = value
+  messageTime.value = new Date()
+}
+
+function showError(value: string) {
+  errorMessage.value = value
+  errorMessageTime.value = new Date()
+}
+
 async function load() {
   loading.value = true
   errorMessage.value = ''
@@ -267,7 +316,7 @@ async function load() {
       }
     }
   } catch (error) {
-    errorMessage.value = errorText(error)
+    showError(errorText(error))
   } finally {
     loading.value = false
   }
@@ -314,9 +363,9 @@ async function handleFileChange(event: Event) {
     revokeImportPreviewSources = resolvedSources.revoke
     importPreviewSources.value = resolvedSources.sources
     importPreview.value = candidates
-    message.value = `已识别 ${importPreview.value.length} 个动画，请确认导入`
+    showMessage(`已识别 ${importPreview.value.length} 个动画，请确认导入`)
   } catch (error) {
-    errorMessage.value = errorText(error)
+    showError(errorText(error))
     resetImport()
   } finally {
     busy.value = false
@@ -376,11 +425,11 @@ async function confirmImport() {
       for (const file of pendingFiles.value) fallback.append('file', file)
       await axiosInstance.post(`${API_BASE}/import`, fallback, request)
     }
-    message.value = `导入完成，共处理 ${importPreview.value.length} 个动画`
+    showMessage(`导入完成，共处理 ${importPreview.value.length} 个动画`)
     resetImport()
     await load()
   } catch (error) {
-    errorMessage.value = errorText(error)
+    showError(errorText(error))
   } finally {
     busy.value = false
   }
@@ -425,9 +474,9 @@ async function addAttachments(items: Attachment[]) {
         tags: [],
       })
     }
-    message.value = `已从附件库添加 ${items.length} 个动画`
+    showMessage(`已从附件库添加 ${items.length} 个动画`)
     await load()
-  } catch (error) { errorMessage.value = errorText(error) } finally { busy.value = false }
+  } catch (error) { showError(errorText(error)) } finally { busy.value = false }
 }
 
 function openCreateGroup() {
@@ -475,7 +524,7 @@ async function saveGroup() {
   const name = groupDraft.value.name.trim()
   const displayName = groupDraft.value.displayName.trim()
   if (!name || !displayName) {
-    errorMessage.value = '分组名称和显示名称不能为空'
+    showError('分组名称和显示名称不能为空')
     return
   }
   busy.value = true
@@ -493,9 +542,28 @@ async function saveGroup() {
     if (index >= 0) groups.value[index] = saved
     else groups.value.push(saved)
     groupDialogOpen.value = false
-    message.value = editingGroupName.value ? '分组已更新' : '分组已创建'
+    showMessage(editingGroupName.value ? '分组已更新' : '分组已创建')
   } catch (error) {
-    errorMessage.value = errorText(error)
+    showError(errorText(error))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function persistGroupOrder(ordered: string[]) {
+  const orderByName = new Map(ordered.map((name, index) => [name, index]))
+  groups.value = groups.value.map((group) => {
+    const nextSort = orderByName.get(group.metadata.name)
+    return nextSort == null ? group : { ...group, spec: { ...group.spec, sort: nextSort } }
+  })
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    await axiosInstance.post(`${API_BASE}/groups/reorder`, { names: ordered })
+    showMessage('分组排序已保存')
+  } catch (error) {
+    showError(errorText(error))
+    await load()
   } finally {
     busy.value = false
   }
@@ -513,9 +581,9 @@ async function removeGroup(group: Group) {
       await axiosInstance.delete(`${API_BASE}/groups/${encodeURIComponent(group.metadata.name)}`)
       groups.value = groups.value.filter((item) => item.metadata.name !== group.metadata.name)
       if (selectedGroup.value === group.metadata.name) selectedGroup.value = ''
-      message.value = '分组已删除'
+      showMessage('分组已删除')
     } catch (error) {
-      errorMessage.value = errorText(error)
+      showError(errorText(error))
     } finally {
       busy.value = false
     }
@@ -535,6 +603,7 @@ function openAnimation(animation: Animation) {
     tags: [...(animation.spec.tags ?? [])],
     sourceFileName: animation.spec.sourceFileName ?? '',
     enabled: animation.spec.enabled !== false,
+    sort: animation.spec.sort ?? 0,
     defaults: cloneDefaults(animation.spec.defaults),
   }
   animationDialogOpen.value = true
@@ -545,7 +614,7 @@ async function saveAnimation() {
   if (!draft) return
   const displayName = draft.displayName.trim()
   if (!displayName) {
-    errorMessage.value = '动画名称不能为空'
+    showError('动画名称不能为空')
     return
   }
   busy.value = true
@@ -564,14 +633,15 @@ async function saveAnimation() {
       sourceFileName: draft.sourceFileName || null,
       defaults: draft.defaults,
       enabled: draft.enabled,
+      sort: draft.sort,
     })
     const index = animations.value.findIndex((item) => item.metadata.name === response.data.metadata.name)
     if (index >= 0) animations.value[index] = response.data
     else animations.value.push(response.data)
     animationDialogOpen.value = false
-    message.value = '动画配置已保存'
+    showMessage('动画配置已保存')
   } catch (error) {
-    errorMessage.value = errorText(error)
+    showError(errorText(error))
   } finally {
     busy.value = false
   }
@@ -591,9 +661,9 @@ async function removeAnimation(animation: Animation) {
       })
       animations.value = animations.value.filter((item) => item.metadata.name !== animation.metadata.name)
       selectedNames.value = selectedNames.value.filter((name) => name !== animation.metadata.name)
-      message.value = '动画已删除'
+      showMessage('动画已删除')
     } catch (error) {
-      errorMessage.value = errorText(error)
+      showError(errorText(error))
     } finally {
       busy.value = false
     }
@@ -615,11 +685,155 @@ function toggleSelectVisible() {
     : Array.from(new Set([...selectedNames.value, ...visibleNames]))
 }
 
+function clearSelection() {
+  selectedNames.value = []
+  moveGroup.value = ''
+  movePositionDialogOpen.value = false
+}
+
 function toggleSelectionMode() {
   selectionMode.value = !selectionMode.value
   if (!selectionMode.value) {
+    clearSelection()
+  }
+}
+
+function handleDragStart(animation: Animation, event: DragEvent) {
+  if (!sortableEnabled.value) return
+  const ordered = groupAnimations.value.map((item) => item.metadata.name)
+  const sourceName = animation.metadata.name
+  const selected = selectedNames.value.includes(sourceName)
+    ? new Set(movableSelection.value)
+    : new Set([sourceName])
+  draggingNames.value = ordered.filter((name) => selected.has(name))
+  event.dataTransfer?.setData('text/plain', sourceName)
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
+}
+
+function handleDragOver(animation: Animation, event: DragEvent) {
+  if (!sortableEnabled.value || !draggingNames.value.length || draggingNames.value.includes(animation.metadata.name)) return
+  event.preventDefault()
+  handleDragAutoScroll(event)
+  dragOverName.value = animation.metadata.name
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+}
+
+async function handleDrop(animation: Animation, event: DragEvent) {
+  event.preventDefault()
+  if (!sortableEnabled.value) return
+  const sourceName = event.dataTransfer?.getData('text/plain')
+  const targetName = animation.metadata.name
+  const draggedNames = draggingNames.value.length
+    ? draggingNames.value
+    : sourceName ? [sourceName] : []
+  draggingNames.value = []
+  dragOverName.value = ''
+  if (!draggedNames.length || draggedNames.includes(targetName)) return
+  const ordered = groupAnimations.value.map((item) => item.metadata.name)
+  const validDraggedNames = draggedNames.filter((name) => ordered.includes(name))
+  if (!validDraggedNames.length || !ordered.includes(targetName)) return
+  const sourceIndex = Math.min(...validDraggedNames.map((name) => ordered.indexOf(name)))
+  const targetIndex = ordered.indexOf(targetName)
+  const remaining = ordered.filter((name) => !validDraggedNames.includes(name))
+  const insertionIndex = sourceIndex < targetIndex
+    ? remaining.indexOf(targetName) + 1
+    : remaining.indexOf(targetName)
+  remaining.splice(Math.max(0, insertionIndex), 0, ...validDraggedNames)
+  await persistOrder(remaining)
+}
+
+function handleDragAutoScroll(event: DragEvent) {
+  if (!draggingNames.value.length) return
+  const edge = 90
+  const speed = 18
+  if (event.clientY < edge) window.scrollBy({ top: -speed, behavior: 'auto' })
+  else if (event.clientY > window.innerHeight - edge) window.scrollBy({ top: speed, behavior: 'auto' })
+}
+
+function handleDragWheel(event: WheelEvent) {
+  if (!draggingNames.value.length || event.deltaY === 0) return
+  event.preventDefault()
+  window.scrollBy({ top: event.deltaY, left: event.deltaX, behavior: 'auto' })
+}
+
+function handleDragKeydown(event: KeyboardEvent) {
+  if (!draggingNames.value.length) return
+  let offset: number | null = null
+  const pageStep = Math.max(120, window.innerHeight * 0.9)
+  if (event.key === 'PageDown') offset = pageStep
+  else if (event.key === 'PageUp') offset = -pageStep
+  else if (event.key === ' ') offset = event.shiftKey ? -pageStep : pageStep
+  else if (event.key === 'Home') {
+    event.preventDefault()
+    window.scrollTo({ top: 0, behavior: 'auto' })
+    return
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    const root = document.documentElement
+    window.scrollTo({ top: root.scrollHeight, behavior: 'auto' })
+    return
+  }
+  if (offset == null) return
+  event.preventDefault()
+  window.scrollBy({ top: offset, behavior: 'auto' })
+}
+
+async function persistOrder(ordered: string[]): Promise<boolean> {
+  if (!selectedGroup.value || !ordered.length) return false
+  const orderByName = new Map(ordered.map((name, index) => [name, index]))
+  animations.value = animations.value.map((item) => {
+    const nextSort = orderByName.get(item.metadata.name)
+    return nextSort == null ? item : { ...item, spec: { ...item.spec, sort: nextSort } }
+  })
+  busy.value = true
+  errorMessage.value = ''
+  try {
+    await axiosInstance.post(`${API_BASE}/animations/reorder`, {
+      groupName: selectedGroup.value === UNGROUPED ? null : selectedGroup.value,
+      names: ordered,
+    })
+    showMessage('动画排序已保存')
+  } catch (error) {
+    showError(errorText(error))
+    await load()
+    return false
+  } finally {
+    busy.value = false
+  }
+  return true
+}
+
+function handleDragEnd() {
+  draggingNames.value = []
+  dragOverName.value = ''
+}
+
+function openMovePosition() {
+  if (!movableSelection.value.length) {
+    showError('请先选择当前分组内的动画')
+    return
+  }
+  if (!positionOptions.value.length) {
+    showError('当前分组没有可放置在其前的动画')
+    return
+  }
+  movePositionDialogOpen.value = true
+}
+
+async function moveSelectedBefore(targetName: string) {
+  const selected = new Set(movableSelection.value)
+  if (!selected.size || selected.has(targetName)) return
+  const ordered = groupAnimations.value.map((item) => item.metadata.name)
+  const moving = ordered.filter((name) => selected.has(name))
+  const remaining = ordered.filter((name) => !selected.has(name))
+  const targetIndex = remaining.indexOf(targetName)
+  if (!moving.length || targetIndex < 0) return
+  remaining.splice(targetIndex, 0, ...moving)
+  const saved = await persistOrder(remaining)
+  if (saved) {
+    movePositionDialogOpen.value = false
     selectedNames.value = []
-    moveGroup.value = ''
+    selectionMode.value = false
   }
 }
 
@@ -642,8 +856,8 @@ async function bulkDelete() {
       animations.value = animations.value.filter((item) => !selectedNames.value.includes(item.metadata.name))
       selectedNames.value = []
       selectionMode.value = false
-      message.value = '已批量删除动画'
-    } catch (error) { errorMessage.value = errorText(error) } finally { busy.value = false }
+      showMessage('已批量删除动画')
+    } catch (error) { showError(errorText(error)) } finally { busy.value = false }
   })
 }
 
@@ -655,13 +869,30 @@ async function bulkMove() {
     await load()
     selectedNames.value = []
     selectionMode.value = false
-    message.value = '已移动动画分组'
-  } catch (error) { errorMessage.value = errorText(error) } finally { busy.value = false }
+    showMessage('已移动动画分组')
+  } catch (error) { showError(errorText(error)) } finally { busy.value = false }
 }
 
-onMounted(load)
-onBeforeUnmount(() => revokeImportPreviewSources())
-watch([search, selectedGroup], () => { page.value = 1 })
+onMounted(() => {
+  load()
+  window.addEventListener('wheel', handleDragWheel, { capture: true, passive: false })
+  window.addEventListener('keydown', handleDragKeydown, true)
+})
+onBeforeUnmount(() => {
+  revokeImportPreviewSources()
+  window.removeEventListener('wheel', handleDragWheel, true)
+  window.removeEventListener('keydown', handleDragKeydown, true)
+})
+watch([search, selectedGroup], () => {
+  page.value = 1
+  draggingNames.value = []
+  dragOverName.value = ''
+  movePositionDialogOpen.value = false
+})
+watch(selectedGroup, () => {
+  selectedNames.value = []
+  moveGroup.value = ''
+})
 watch([tagFilter, enabledFilter, pageSize], () => { page.value = 1 })
 watch(pageCount, (count) => { if (page.value > count) page.value = count })
 </script>
@@ -682,9 +913,6 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
       </label>
       </div>
     </header>
-
-    <div v-if="message" class="notice success" role="status">{{ message }}</div>
-    <div v-if="errorMessage" class="notice error" role="alert">{{ errorMessage }}</div>
 
     <section class="stats-row" aria-label="动画库概览">
       <div class="stat"><span>动画总数</span><strong>{{ animations.length }}</strong></div>
@@ -774,26 +1002,33 @@ watch(pageCount, (count) => { if (page.value > count) page.value = count })
     </section>
 
     <section class="library-layout">
-      <LottieGroupSidebar :groups="groups" :animations="animations" :selected="selectedGroup" @update:selected="selectedGroup = $event" @create="openCreateGroup" @edit="openEditGroup" @remove="removeGroup" />
+      <LottieGroupSidebar :groups="sortableGroups" :animations="animations" :selected="selectedGroup" :busy="busy" @update:selected="selectedGroup = $event" @create="openCreateGroup" @edit="openEditGroup" @remove="removeGroup" @reorder="persistGroupOrder" />
 
       <section class="content-panel">
         <div class="content-heading">
-          <div>
-            <p class="eyebrow">当前视图</p>
-            <h2>{{ selectedGroupLabel }}</h2>
+          <div class="content-heading-row">
+            <div>
+              <p class="eyebrow">当前视图</p>
+              <h2>{{ selectedGroupLabel }}</h2>
+            </div>
+            <span v-if="loading" class="loading-label">加载中…</span>
+            <div class="content-actions"><label class="page-size-control">每页<select v-model.number="pageSize" aria-label="每页显示数量"><option :value="12">12</option><option :value="24">24</option><option :value="48">48</option><option :value="96">96</option><option :value="192">192</option><option :value="384">384</option></select></label><button class="quiet-button" type="button" :disabled="loading" @click="load">刷新</button><button class="quiet-button" type="button" :disabled="busy" @click="toggleSelectionMode">{{ selectionMode ? '完成选择' : '批量管理' }}</button><button v-if="selectionMode && pagedAnimations.length" class="quiet-button" type="button" @click="toggleSelectVisible">{{ pagedAnimations.every((item) => selectedNames.includes(item.metadata.name)) ? '取消全选' : '全选当前页' }}</button></div>
           </div>
-          <span v-if="loading" class="loading-label">加载中…</span>
-          <div class="content-actions"><label class="page-size-control">每页<select v-model.number="pageSize" aria-label="每页显示数量"><option :value="12">12</option><option :value="24">24</option><option :value="48">48</option><option :value="96">96</option><option :value="192">192</option><option :value="384">384</option></select></label><button class="quiet-button" type="button" :disabled="loading" @click="load">刷新</button><button class="quiet-button" type="button" @click="toggleSelectionMode">{{ selectionMode ? '完成选择' : '批量管理' }}</button><button v-if="selectionMode && pagedAnimations.length" class="quiet-button" type="button" @click="toggleSelectVisible">{{ pagedAnimations.every((item) => selectedNames.includes(item.metadata.name)) ? '取消全选' : '全选当前页' }}</button></div>
+          <div v-if="message || errorMessage" class="notices">
+            <div v-if="message" class="notice success" role="status"><span>{{ message }}</span><time :datetime="messageTime?.toISOString()">{{ formatNoticeTime(messageTime) }}</time></div>
+            <div v-if="errorMessage" class="notice error" role="alert"><span>{{ errorMessage }}</span><time :datetime="errorMessageTime?.toISOString()">{{ formatNoticeTime(errorMessageTime) }}</time></div>
+          </div>
         </div>
-        <div v-if="selectionMode && selectedNames.length" class="bulk-bar"><span>已选择 {{ selectedNames.length }} 项</span><select v-model="moveGroup"><option value="">移出分组</option><option v-for="group in groups" :key="group.metadata.name" :value="group.metadata.name">移动到 {{ group.spec.displayName }}</option></select><button class="quiet-button" type="button" :disabled="busy" @click="bulkMove">移动</button><button class="danger-button" type="button" :disabled="busy" @click="bulkDelete">删除</button></div>
-        <div v-if="pagedAnimations.length" class="grid"><LottieAnimationCard v-for="animation in pagedAnimations" :key="animation.metadata.name" :animation="animation" :source="source(animation)" :group-label="displayGroup(animation.spec.groupName)" :selectable="selectionMode" :selected="selectedNames.includes(animation.metadata.name)" @configure="openAnimation" @remove="removeAnimation" @select="toggleSelection" /></div>
+        <div v-if="selectionMode && selectedNames.length" class="bulk-bar"><span>已选择 {{ selectedNames.length }} 项</span><select v-model="moveGroup"><option value="">移出分组</option><option v-for="group in groups" :key="group.metadata.name" :value="group.metadata.name">移动到 {{ group.spec.displayName }}</option></select><button class="quiet-button" type="button" :disabled="busy || !movableSelection.length || !positionOptions.length" @click="openMovePosition">调整位置</button><button class="quiet-button" type="button" :disabled="busy" @click="bulkMove">移动</button><button class="danger-button" type="button" :disabled="busy" @click="bulkDelete">删除</button><button class="quiet-button" type="button" :disabled="busy" @click="clearSelection">取消</button></div>
+        <div v-if="displayedAnimations.length" class="grid" :class="{ sorting: sortableEnabled }"><LottieAnimationCard v-for="animation in displayedAnimations" :key="animation.metadata.name" :animation="animation" :source="source(animation)" :group-label="displayGroup(animation.spec.groupName)" :selectable="selectionMode" :selected="selectedNames.includes(animation.metadata.name)" :sortable="sortableEnabled" :dragging="draggingNames.includes(animation.metadata.name)" :drag-over="dragOverName === animation.metadata.name" @configure="openAnimation" @remove="removeAnimation" @select="toggleSelection" @dragstart="handleDragStart" @dragover="handleDragOver" @drop="handleDrop" @dragend="handleDragEnd" /></div>
         <nav v-if="visibleAnimations.length" class="library-pagination" aria-label="动画分页"><button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button><span>第 {{ page }} / {{ pageCount }} 页 · 每页 {{ pageSize }} · 共 {{ visibleAnimations.length }} 个</span><button type="button" :disabled="page >= pageCount" @click="page += 1">下一页</button></nav>
-        <p v-else class="empty">{{ search ? '没有匹配的动画。' : '暂无动画，请导入 JSON、dotLottie、TGS 或 ZIP 文件。' }}</p>
+        <p v-else-if="!displayedAnimations.length" class="empty">{{ search ? '没有匹配的动画。' : '暂无动画，请导入 JSON、dotLottie、TGS 或 ZIP 文件。' }}</p>
       </section>
     </section>
 
     <LottieGroupDialog v-model:open="groupDialogOpen" :draft="groupDraft" :groups="groups" :editing-name="editingGroupName" :busy="busy" @save="saveGroup" />
     <LottieAnimationDialog v-model:open="animationDialogOpen" :draft="animationDraft" :groups="groups" :source="animationDialogSource" :busy="busy" @save="saveAnimation" />
+    <AnimationPositionDialog v-model:open="movePositionDialogOpen" :options="positionOptions" :selected-count="movableSelection.length" :busy="busy" @move="moveSelectedBefore" />
     <AttachmentPickerModal v-model:open="attachmentPickerOpen" :busy="busy" @select="addAttachments" />
     <ActionConfirmDialog
       v-model:open="confirmOpen"
@@ -844,7 +1079,7 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .upload-button { border-color: #0f766e; color: #0f766e; background: #fff; white-space: nowrap; } .upload-button:hover { background: #ecfdf5; } .upload-button.disabled { opacity: .55; pointer-events: none; } .upload-button input { display: none; }
 .primary-button { color: #fff; background: #0f766e; } .primary-button:hover { background: #115e59; } .quiet-button { border-color: #cbd5e1; color: #334155; background: #fff; } .quiet-button:hover { background: #f1f5f9; } .danger-button { border-color: #fecdd3; color: #be123c; background: #fff; } .danger-button:hover { background: #fff1f2; }
 .icon-button { width: 30px; height: 30px; padding: 0; border-color: #cbd5e1; color: #334155; background: #fff; } .icon-button:hover { background: #f1f5f9; }
-.notice { margin-top: 20px; padding: 10px 14px; border-radius: 5px; font-size: 13px; } .notice.success { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; } .notice.error { color: #9f1239; background: #fff1f2; border: 1px solid #fecdd3; }
+.notices { display: grid; gap: 8px; } .notice { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 10px 14px; border-radius: 5px; font-size: 13px; } .notice time { flex: 0 0 auto; color: #64748b; font-size: 12px; white-space: nowrap; } .notice.success { color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; } .notice.error { color: #9f1239; background: #fff1f2; border: 1px solid #fecdd3; }
 .stats-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 20px; }
 .stat { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 14px 16px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; }
 .stat span { color: #64748b; font-size: 12px; }.stat strong { color: #0f766e; font-size: 22px; line-height: 1; }
@@ -852,8 +1087,7 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .import-options { justify-content: flex-start; margin: 18px 0; } .import-options label { display: flex; align-items: center; gap: 8px; color: #475569; font-size: 13px; } select, input, textarea { border: 1px solid #cbd5e1; border-radius: 4px; color: #17202a; background: #fff; } select, input { min-height: 34px; padding: 6px 9px; } textarea { padding: 8px 9px; resize: vertical; } select:focus, input:focus, textarea:focus { outline: 2px solid #99f6e4; outline-offset: 1px; border-color: #0f766e; }
 .preview-list { display: grid; gap: 6px; max-height: 240px; overflow: auto; } .preview-row { display: grid; grid-template-columns: 52px 48px minmax(120px, 1.2fr) minmax(140px, 2fr) minmax(80px, 1fr); gap: 10px; align-items: center; min-height: 58px; padding: 8px 10px; color: #475569; font-size: 13px; background: #f8fafc; } .preview-media { display: grid; width: 48px; height: 48px; place-items: center; overflow: hidden; border: 1px solid #cbd5e1; border-radius: 4px; background: repeating-conic-gradient(#f8fafc 0 25%, #eef2f7 0 50%) 50% / 12px 12px; cursor: zoom-in; } .preview-media:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; } .preview-media.unavailable { color: #94a3b8; cursor: default; } .format-badge { color: #0f766e; font-size: 11px; font-weight: 700; } .preview-name { color: #17202a; font-weight: 600; } .preview-source, .preview-group { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .import-preview-popover { position: fixed; z-index: 60; display: grid; width: 256px; height: 256px; place-items: center; overflow: hidden; border: 1px solid #94a3b8; border-radius: 5px; background: repeating-conic-gradient(#fff 0 25%, #f1f5f9 0 50%) 50% / 16px 16px; box-shadow: 0 16px 32px rgb(15 23 42 / 20%); pointer-events: none; }
 .toolbar { display: flex; align-items: center; gap: 10px; margin: 24px 0 18px; } .search-field { display: flex; align-items: center; gap: 8px; flex: 1 1 320px; max-width: 520px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 5px; background: #fff; color: #64748b; } .search-field input { width: 100%; min-height: 38px; padding: 7px 0; border: 0; outline: 0; } .filter-field, .filter-select { flex: 0 1 190px; min-height: 38px; padding: 7px 10px; } .result-count, .loading-label { color: #64748b; font-size: 13px; white-space: nowrap; }
-.library-layout { display: grid; grid-template-columns: minmax(220px, 250px) minmax(0, 1fr); gap: 28px; align-items: start; min-width: 0; } .library-layout > :deep(.sidebar) { position: sticky; top: 20px; } .sidebar { width: 100%; padding: 16px 12px; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; } .sidebar-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 12px; border-bottom: 1px solid #e2e8f0; } .sidebar-heading h2 { font-size: 15px; } .group-list { display: grid; gap: 3px; padding-top: 8px; max-height: calc(100vh - 230px); overflow-y: auto; } .group-list > button, .group-select { display: flex; align-items: center; justify-content: space-between; width: 100%; border: 0; border-radius: 4px; padding: 9px; color: #475569; background: transparent; text-align: left; font-size: 13px; } .group-list > button:hover, .group-item:hover { background: #f8fafc; } .group-list > button.active, .group-item.active { color: #0f766e; background: #f0fdfa; } .group-list button span { color: #94a3b8; font-size: 12px; } .group-item { display: flex; align-items: center; border-radius: 4px; } .group-item .group-select { flex: 1; } .group-actions { display: none; gap: 2px; padding-right: 5px; } .group-item:hover .group-actions, .group-item.active .group-actions { display: flex; } .group-actions button { border: 0; padding: 3px; color: #64748b; background: transparent; font-size: 11px; }
-.content-panel { min-width: 0; } .content-heading { margin-bottom: 16px; } .content-heading h2 { font-size: 22px; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; } .animation-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; overflow: hidden; } .animation-card.disabled { opacity: .65; } .card-preview { display: grid; min-height: 190px; position: relative; place-items: center; padding: 16px; background: linear-gradient(135deg, #f8fafc 25%, #f1f5f9 25%, #f1f5f9 50%, #f8fafc 50%, #f8fafc 75%, #f1f5f9 75%); background-size: 16px 16px; } .disabled-label { position: absolute; top: 9px; right: 9px; padding: 3px 6px; border-radius: 3px; color: #475569; background: #e2e8f0; font-size: 11px; } .card-body { display: grid; gap: 5px; min-width: 0; padding: 13px 14px 5px; } .card-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .card-meta, .card-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 12px; } .card-actions { display: flex; gap: 8px; padding: 9px 14px 13px; } .card-actions button { flex: 1; padding: 6px 8px; font-size: 12px; }
+.library-layout { display: grid; grid-template-columns: minmax(260px, 300px) minmax(0, 1fr); gap: 28px; align-items: stretch; min-width: 0; } .library-layout > :deep(.sidebar) { position: sticky; top: 0; align-self: start; height: calc(100vh - 24px); } .content-panel { min-width: 0; } .content-heading { position: sticky; top: 0; z-index: 10; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; min-width: 0; margin-bottom: 16px; padding: 12px 0; background: #f8fafc; } .content-heading-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; flex-wrap: wrap; } .content-heading-row > div:first-child { min-width: 0; } .content-heading > .notices { width: 100%; } .content-heading h2 { font-size: 22px; } .bulk-bar, .grid { position: relative; z-index: 0; } .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; } .grid.sorting { user-select: none; } .animation-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; overflow: hidden; } .animation-card.disabled { opacity: .65; } .card-preview { display: grid; min-height: 190px; position: relative; place-items: center; padding: 16px; background: linear-gradient(135deg, #f8fafc 25%, #f1f5f9 25%, #f1f5f9 50%, #f8fafc 50%, #f8fafc 75%, #f1f5f9 75%); background-size: 16px 16px; } .disabled-label { position: absolute; top: 9px; right: 9px; padding: 3px 6px; border-radius: 3px; color: #475569; background: #e2e8f0; font-size: 11px; } .card-body { display: grid; gap: 5px; min-width: 0; padding: 13px 14px 5px; } .card-body strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .card-meta, .card-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #64748b; font-size: 12px; } .card-actions { display: flex; gap: 8px; padding: 9px 14px 13px; } .card-actions button { flex: 1; padding: 6px 8px; font-size: 12px; }
 .content-actions { display: inline-flex; align-items: center; gap: 8px; } .page-size-control { display: inline-flex; align-items: center; gap: 6px; color: #64748b; font-size: 13px; white-space: nowrap; } .page-size-control select { min-height: 34px; padding: 5px 7px; }
 .library-pagination { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 22px 0 4px; color: #64748b; font-size: 13px; }
 .library-pagination button { min-height: 34px; border: 1px solid #cbd5e1; border-radius: 4px; padding: 7px 13px; color: #334155; background: #fff; font-size: 13px; }
@@ -861,7 +1095,7 @@ button, input, select, textarea { font: inherit; } button { cursor: pointer; } b
 .bulk-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #99f6e4; border-radius: 5px; color: #115e59; background: #f0fdfa; font-size: 13px; }
 .empty { padding: 70px 20px; color: #64748b; text-align: center; border: 1px dashed #cbd5e1; border-radius: 6px; background: #fff; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; background: rgb(15 23 42 / 45%); } .modal { width: min(520px, 100%); max-height: calc(100vh - 48px); overflow: auto; padding: 22px; border-radius: 7px; background: #fff; box-shadow: 0 20px 50px rgb(15 23 42 / 20%); } .animation-modal { width: min(700px, 100%); } .modal-header { align-items: flex-start; margin-bottom: 20px; } .form { display: grid; gap: 16px; } .form > label, fieldset > label { display: grid; gap: 6px; color: #475569; font-size: 13px; } fieldset { display: grid; gap: 14px; margin: 0; padding: 14px; border: 1px solid #e2e8f0; border-radius: 5px; } legend { padding: 0 5px; color: #17202a; font-size: 13px; font-weight: 700; } .form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; } .form-grid label { display: grid; gap: 5px; color: #64748b; font-size: 12px; } .toggle-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; } .checkbox-label { display: flex !important; align-items: center; gap: 7px; color: #475569 !important; } .checkbox-label input { min-height: auto; accent-color: #0f766e; } .modal-actions { justify-content: flex-end; padding-top: 4px; } details { color: #64748b; font-size: 12px; } summary { cursor: pointer; color: #475569; font-weight: 600; } .resource-meta { margin: 8px 0 0; line-height: 1.7; overflow-wrap: anywhere; }
-@media (max-width: 820px) { .library { min-height: 100vh; padding: 24px 20px 40px; } .library-layout { grid-template-columns: 1fr; } .library-layout > :deep(.sidebar) { position: static; } .sidebar { padding: 12px; } .group-list { display: flex; flex-wrap: wrap; max-height: none; } .group-list > button, .group-item { width: auto; } .group-item .group-select { width: auto; } .group-actions { display: flex; } }
+@media (max-width: 820px) { .library { min-height: 100vh; padding: 24px 20px 40px; } .library-layout { grid-template-columns: 1fr; } .library-layout > :deep(.sidebar) { position: static; height: auto; } .sidebar { padding: 12px; } .group-list { display: flex; flex-wrap: wrap; max-height: none; overflow: visible; } .group-list > button, .group-item { width: auto; } .group-item .group-select { width: auto; } .group-actions { display: flex; } .content-heading { position: static; padding: 0; } }
 @media (max-width: 560px) { .page-header, .toolbar, .import-options { align-items: stretch; flex-direction: column; } .header-actions { width: 100%; } .header-actions > * { flex: 1; } .upload-button { width: 100%; } .search-field, .filter-field, .filter-select { width: 100%; max-width: none; flex-basis: auto; } .preview-row { grid-template-columns: 52px minmax(0, 1fr); gap: 5px 10px; } .preview-media { grid-row: span 4; } .format-badge, .preview-name, .preview-source, .preview-group { grid-column: 2; } .form-grid { grid-template-columns: 1fr 1fr; } .stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 

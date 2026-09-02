@@ -2,17 +2,25 @@ package cn.ncii.lottie;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import cn.ncii.lottie.extension.LottieAnimation;
+import cn.ncii.lottie.service.LottieCatalogRepository;
 import cn.ncii.lottie.service.LottieCatalogService;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import run.halo.app.extension.Metadata;
 import run.halo.app.plugin.ReactiveSettingFetcher;
 
 class LottieCatalogServiceTest {
@@ -88,5 +96,34 @@ class LottieCatalogServiceTest {
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
             () -> service.previewZipWithSettings(output.toByteArray()).block());
         assertEquals("Archive contains more than 1 files", exception.getMessage());
+    }
+
+    @Test
+    void reordersAnimationsWithinGroup() {
+        LottieAnimation first = animation("first", 0);
+        LottieAnimation second = animation("second", 1);
+        LottieAnimation third = animation("third", 2);
+        LottieCatalogRepository repository = mock(LottieCatalogRepository.class);
+        when(repository.listAnimations()).thenReturn(Flux.just(third, first, second));
+        when(repository.saveAnimation(any(LottieAnimation.class)))
+            .thenAnswer(invocation -> Mono.just(invocation.getArgument(0)));
+
+        new LottieCatalogService(repository, null, null, null)
+            .reorderAnimations("stickers", List.of("second", "third", "first"))
+            .block();
+
+        assertEquals(2, first.getSpec().getSort());
+        assertEquals(0, second.getSpec().getSort());
+        assertEquals(1, third.getSpec().getSort());
+        verify(repository, times(3)).saveAnimation(any(LottieAnimation.class));
+    }
+
+    private static LottieAnimation animation(String name, int sort) {
+        LottieAnimation animation = new LottieAnimation();
+        animation.setMetadata(new Metadata());
+        animation.getMetadata().setName(name);
+        animation.getSpec().setGroupName("stickers");
+        animation.getSpec().setSort(sort);
+        return animation;
     }
 }

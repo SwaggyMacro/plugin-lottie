@@ -23,6 +23,8 @@ public class LottieAnimation extends AbstractExtension {
     public static class Spec {
         private String displayName;
         private String groupName;
+        /** Position within the containing group, starting at zero. */
+        private Integer sort = 0;
         private String mediaType = "application/json";
         private String format = "json";
         private String sha256;

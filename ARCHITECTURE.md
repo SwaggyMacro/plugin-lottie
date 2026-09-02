@@ -84,6 +84,7 @@ Halo Extension GVK 为 `lottie.halo.run/v1alpha1, LottieAnimation`。
 
 - `displayName`：可编辑的单动画名称；
 - `groupName`：所属 `LottieGroup` 的资源名；
+- `sort`：分组内排序值，从 0 开始；
 - `format`：规范化后的 `json` 或 `lottie`；
 - `mediaType`：内容 MIME 类型；
 - `attachmentName` / `attachmentUrl`：Halo 附件名称和可访问 URL；导入内容不持久化到 Extension；
@@ -155,6 +156,7 @@ sequenceDiagram
 | `POST` | `/import` | 导入单文件或 ZIP。 |
 | `POST` | `/animations/bulk-delete` | 批量删除动画及其附件。 |
 | `POST` | `/animations/bulk-move` | 批量移动动画到指定分组或未分组。 |
+| `POST` | `/animations/reorder` | 保存指定分组内动画的完整顺序。 |
 
 公共 API 使用 `api.lottie.halo.run/v1alpha1`：
 

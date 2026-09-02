@@ -13,8 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -77,7 +80,18 @@ public class LottieCatalogService {
             .filter(item -> {
                 LottieAnimation.Spec spec = animationSpec(item);
                 return group == null || group.isBlank() || group.equals(spec.getGroupName());
-            });
+            })
+            .sort(LottieCatalogService::compareAnimations);
+    }
+
+    private static int compareAnimations(LottieAnimation left, LottieAnimation right) {
+        int leftSort = animationSpec(left).getSort() == null ? 0 : animationSpec(left).getSort();
+        int rightSort = animationSpec(right).getSort() == null ? 0 : animationSpec(right).getSort();
+        int bySort = Integer.compare(leftSort, rightSort);
+        if (bySort != 0) return bySort;
+        String leftName = left == null || left.getMetadata() == null ? "" : left.getMetadata().getName();
+        String rightName = right == null || right.getMetadata() == null ? "" : right.getMetadata().getName();
+        return Comparator.nullsFirst(String.CASE_INSENSITIVE_ORDER).compare(leftName, rightName);
     }
 
     public Flux<LottieGroup> listGroups() {
@@ -213,6 +227,58 @@ public class LottieCatalogService {
             }))).then();
     }
 
+    /** Persists the complete order of one group after a drag-and-drop action. */
+    public Mono<Void> reorderAnimations(String groupName, List<String> names) {
+        String target = groupName == null || groupName.isBlank() ? null : resourceName(groupName, "group");
+        List<String> requested = names == null ? List.of() : names.stream()
+            .filter(Objects::nonNull)
+            .map(String::trim)
+            .filter(name -> !name.isBlank())
+            .distinct()
+            .toList();
+        return repository().listAnimations()
+            .filter(animation -> Objects.equals(target, animationSpec(animation).getGroupName()))
+            .collectList()
+            .flatMapMany(items -> {
+                Map<String, Integer> requestedOrder = new HashMap<>();
+                for (int index = 0; index < requested.size(); index++) {
+                    requestedOrder.put(resourceName(requested.get(index), "animation"), index);
+                }
+                items.sort(Comparator
+                    .comparingInt((LottieAnimation animation) -> requestedOrder.getOrDefault(
+                        animation.getMetadata() == null ? null : animation.getMetadata().getName(), Integer.MAX_VALUE))
+                    .thenComparingInt(animation -> animationSpec(animation).getSort() == null
+                        ? 0 : animationSpec(animation).getSort())
+                    .thenComparing(animation -> animation.getMetadata() == null
+                        ? "" : Objects.requireNonNullElse(animation.getMetadata().getName(), ""),
+                        String.CASE_INSENSITIVE_ORDER));
+                for (int index = 0; index < items.size(); index++) {
+                    animationSpec(items.get(index)).setSort(index);
+                }
+                return Flux.fromIterable(items).concatMap(repository()::saveAnimation);
+            })
+            .then();
+    }
+
+    /** Persists the complete order of the top-level group list. */
+    public Mono<Void> reorderGroups(List<String> names) {
+        List<String> requested = names == null ? List.of() : names.stream()
+            .filter(Objects::nonNull).map(String::trim).filter(name -> !name.isBlank()).distinct().toList();
+        Map<String, Integer> requestedOrder = new HashMap<>();
+        for (int index = 0; index < requested.size(); index++) {
+            requestedOrder.put(resourceName(requested.get(index), "group"), index);
+        }
+        return repository().listGroups().collectList().flatMapMany(items -> {
+            items.sort(Comparator
+                .comparingInt((LottieGroup group) -> requestedOrder.getOrDefault(
+                    group.getMetadata() == null ? null : group.getMetadata().getName(), Integer.MAX_VALUE))
+                .thenComparingInt(group -> groupSpec(group).getSort() == null ? 0 : groupSpec(group).getSort())
+                .thenComparing(group -> group.getMetadata() == null ? "" : Objects.requireNonNullElse(group.getMetadata().getName(), ""), String.CASE_INSENSITIVE_ORDER));
+            for (int index = 0; index < items.size(); index++) groupSpec(items.get(index)).setSort(index);
+            return Flux.fromIterable(items).concatMap(repository()::saveGroup);
+        }).then();
+    }
+
     public Mono<Void> deleteGroup(String name) {
         String groupName = resourceName(name, "group");
         return repository().findGroup(groupName)
@@ -269,6 +335,16 @@ public class LottieCatalogService {
                                                 String attachmentName, String attachmentUrl,
                                                 String sha256, LottieConfig defaults,
                                                 String sourceFileName, Boolean enabled, List<String> tags) {
+        return saveAnimation(name, displayName, groupName, format, mediaType, attachmentName,
+            attachmentUrl, sha256, defaults, sourceFileName, enabled, tags, null);
+    }
+
+    public Mono<LottieAnimation> saveAnimation(String name, String displayName, String groupName,
+                                                String format, String mediaType,
+                                                String attachmentName, String attachmentUrl,
+                                                String sha256, LottieConfig defaults,
+                                                String sourceFileName, Boolean enabled, List<String> tags,
+                                                Integer sort) {
         String resourceName = resourceName(name, "animation");
         String normalizedGroupName = groupName == null || groupName.isBlank()
             ? null : resourceName(groupName, "group");
@@ -281,6 +357,9 @@ public class LottieCatalogService {
                 animation.getSpec().setDisplayName(displayName == null || displayName.isBlank()
                     ? resourceName : displayName.trim());
                 animation.getSpec().setGroupName(normalizedGroupName);
+                if (sort != null) {
+                    animation.getSpec().setSort(Math.max(0, sort));
+                }
                 animation.getSpec().setFormat(format == null || format.isBlank() ? "json" : format);
                 animation.getSpec().setMediaType(mediaType == null || mediaType.isBlank()
                     ? "application/json" : mediaType);

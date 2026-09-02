@@ -2,15 +2,15 @@
 import LottieCanvas from '../LottieCanvas.vue'
 
 type Animation = { metadata: { name: string }; spec: { displayName: string; format: string; groupName?: string | null; sourceFileName?: string | null; enabled?: boolean | null; tags?: string[] | null; defaults?: Record<string, any> | null } }
-const props = defineProps<{ animation: Animation; source: string; groupLabel: string; selectable?: boolean; selected?: boolean }>()
-const emit = defineEmits<{ configure: [Animation]; remove: [Animation]; select: [Animation] }>()
+const props = defineProps<{ animation: Animation; source: string; groupLabel: string; selectable?: boolean; selected?: boolean; sortable?: boolean; dragging?: boolean; dragOver?: boolean }>()
+const emit = defineEmits<{ configure: [Animation]; remove: [Animation]; select: [Animation]; dragstart: [Animation, DragEvent]; dragover: [Animation, DragEvent]; drop: [Animation, DragEvent]; dragend: [Animation] }>()
 
 function handleCardClick() {
   if (props.selectable) emit('select', props.animation)
 }
 </script>
 <template>
-  <article class="animation-card" :class="{ disabled: props.animation.spec.enabled === false, selected: props.selectable && props.selected }" :role="props.selectable ? 'button' : undefined" :tabindex="props.selectable ? 0 : undefined" @click="handleCardClick" @keydown.enter.prevent="handleCardClick" @keydown.space.prevent="handleCardClick">
+  <article class="animation-card" :class="{ disabled: props.animation.spec.enabled === false, selected: props.selectable && props.selected, sortable: props.sortable, dragging: props.dragging, 'drag-over': props.dragOver }" :role="props.selectable ? 'button' : undefined" :tabindex="props.selectable ? 0 : undefined" :draggable="props.sortable" @click="handleCardClick" @keydown.enter.prevent="handleCardClick" @keydown.space.prevent="handleCardClick" @dragstart="emit('dragstart', props.animation, $event)" @dragover="emit('dragover', props.animation, $event)" @drop="emit('drop', props.animation, $event)" @dragend="emit('dragend', props.animation)">
     <label v-if="props.selectable" class="select-animation" @click.stop><input type="checkbox" :checked="props.selected" @change="emit('select', props.animation)" aria-label="选择动画" /></label>
     <div class="card-preview"><LottieCanvas :src="props.source" :format="props.animation.spec.format" :width="Math.min(Math.max(Number(props.animation.spec.defaults?.width ?? 160), 96), 240)" :height="Math.min(Math.max(Number(props.animation.spec.defaults?.height ?? 160), 96), 240)" :autoplay="false" :loop="Boolean(props.animation.spec.defaults?.loop ?? true)" :speed="Number(props.animation.spec.defaults?.speed ?? 1)" :fit="props.animation.spec.defaults?.fit ?? 'contain'" :align="props.animation.spec.defaults?.align ?? 'center'" :controls="Boolean(props.animation.spec.defaults?.controls ?? false)" :hover-play="true" :freeze-on-offscreen="Boolean(props.animation.spec.defaults?.freezeOnOffscreen ?? true)" :aria-label="props.animation.spec.defaults?.ariaLabel || props.animation.spec.displayName" /><span v-if="props.animation.spec.enabled === false" class="disabled-label">已停用</span></div>
     <div class="card-body"><strong :title="props.animation.spec.displayName">{{ props.animation.spec.displayName }}</strong><span class="card-meta">{{ props.groupLabel }} · {{ props.animation.spec.format }}</span><div v-if="props.animation.spec.tags?.length" class="card-tags"><span v-for="tag in props.animation.spec.tags" :key="tag">{{ tag }}</span></div><span v-if="props.animation.spec.sourceFileName" class="card-source" :title="props.animation.spec.sourceFileName">{{ props.animation.spec.sourceFileName }}</span></div>
@@ -22,6 +22,10 @@ function handleCardClick() {
 .animation-card { position: relative; }
 .animation-card { display: flex; min-width: 0; flex-direction: column; border: 1px solid #e2e8f0; border-radius: 6px; background: #fff; overflow: hidden; }
 .animation-card[role='button'] { cursor: pointer; }
+.animation-card.sortable { cursor: grab; }
+.animation-card.sortable:active { cursor: grabbing; }
+.animation-card.dragging { opacity: .45; }
+.animation-card.drag-over { border-color: #0f766e; box-shadow: 0 0 0 2px rgb(15 118 110 / 18%); }
 .animation-card[role='button']:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
 .animation-card.selected { border-color: #0f766e; box-shadow: 0 0 0 2px rgb(15 118 110 / 16%); }
 .animation-card.disabled { opacity: .65; }
