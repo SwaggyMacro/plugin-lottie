@@ -706,6 +706,13 @@ function toggleSelectionMode() {
   }
 }
 
+function handleSelectionShortcut(event: KeyboardEvent) {
+  if (!['Control', 'Meta'].includes(event.key) || event.repeat || draggingNames.value.length || busy.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+  toggleSelectionMode()
+}
+
 function beginDrag(animation: Animation) {
   if (!sortableEnabled.value) return
   const ordered = groupAnimations.value.map((item) => item.metadata.name)
@@ -923,6 +930,7 @@ onMounted(() => {
   load()
   window.addEventListener('wheel', handleDragWheel, { capture: true, passive: false })
   window.addEventListener('keydown', handleDragKeydown, true)
+  window.addEventListener('keydown', handleSelectionShortcut)
 })
 onBeforeUnmount(() => {
   revokeImportPreviewSources()
@@ -932,6 +940,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointercancel', handlePointerCancel)
   window.removeEventListener('wheel', handleDragWheel, true)
   window.removeEventListener('keydown', handleDragKeydown, true)
+  window.removeEventListener('keydown', handleSelectionShortcut)
 })
 watch([search, selectedGroup], () => {
   page.value = 1
