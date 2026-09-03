@@ -1,9 +1,11 @@
 # Halo Lottie 动画插件
 
-让 Halo 支持 Lottie/TGS 矢量动画，支持在文章内、站点任意地方插入。
+让 Halo 支持 Lottie/TGS 矢量动画，支持在文章内、瞬间以及站点任意地方插入。
 
-> 其实最主要的功能就是为了让我可以在 Halo 用上 Telegram 的动画贴纸包，省去转 `.avif` 这一步，直接显示矢量动画，仅需几十KB大小就有几十MB的效果。  
-> 动画效果预览: [https://b.ncii.cn/archives/yllDoVlz](https://b.ncii.cn/archives/yllDoVlz)
+> 其实最主要的功能就是为了让我可以在 Halo 用上 Telegram 的动画贴纸包，省去转 `.avif` 这一步，直接显示矢量动画，仅需几十KB大小就有几十MB的效果。
+
+动画效果预览: [https://b.ncii.cn/archives/yllDoVlz](https://b.ncii.cn/archives/yllDoVlz)
+
 ## 功能
 
 - 使用 `@lottiefiles/dotlottie-web` 播放 `.json`、`.lottie`、`.tgs`。
